@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP Location API - 高性能IP定位服务</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1E293B',
+                        secondary: '#334155',
+                        cta: '#22C55E',
+                        background: '#0F172A',
+                        text: '#F8FAFC',
+                        muted: '#94A3B8',
+                        border: '#334155'
+                    },
+                    fontFamily: {
+                        mono: ['Space Mono', 'monospace'],
+                        sans: ['Inter', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0F172A;
+            background-image: 
+                radial-gradient(ellipse at 20% 80%, rgba(34, 197, 94, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(34, 197, 94, 0.05) 0%, transparent 50%);
+        }
+        .noise {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            opacity: 0.03;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+        }
+        .glow {
+            box-shadow: 0 0 60px rgba(34, 197, 94, 0.15);
+        }
+        .card-hover {
+            transition: all 0.2s ease;
+        }
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(34, 197, 94, 0.1);
+        }
+        @keyframes pulse-slow {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .animate-pulse-slow {
+            animation: pulse-slow 2s ease-in-out infinite;
+        }
+        @keyframes slide-up {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-slide-up {
+            animation: slide-up 0.3s ease-out forwards;
+        }
+        .input-glow:focus {
+            box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.3);
+        }
+    </style>
+</head>
+<body class="min-h-screen font-sans text-text antialiased">
+    <div class="noise"></div>
+    
+    <main class="relative z-10 max-w-3xl mx-auto px-4 py-16 md:py-24">
+        <header class="mb-16">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="w-10 h-10 rounded-lg bg-cta/20 flex items-center justify-center">
+                    <svg class="w-5 h-5 text-cta" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                </div>
+                <span class="font-mono text-sm text-muted">v1.0.0</span>
+            </div>
+            <h1 class="font-mono text-4xl md:text-5xl font-bold mb-4 tracking-tight">
+                IP Location
+            </h1>
+            <p class="text-lg text-muted max-w-md">
+                输入任意IP地址，即刻获取精准地理位置。支持IPv4和IPv6双栈查询。
+            </p>
+        </header>
+
+        <section class="mb-12">
+            <div class="bg-primary/50 backdrop-blur-sm border border-border rounded-2xl p-6 glow">
+                <form id="queryForm" class="space-y-4">
+                    <div class="relative">
+                        <input 
+                            type="text" 
+                            id="ipInput" 
+                            placeholder="输入IP地址，如 8.8.8.8 或 240e:3b7::1"
+                            class="w-full bg-background border border-border rounded-xl px-4 py-4 text-text placeholder-muted/50 focus:outline-none focus:border-cta input-glow transition-all font-mono"
+                            autocomplete="off"
+                        >
+                        <button 
+                            type="submit"
+                            class="absolute right-2 top-1/2 -translate-y-1/2 bg-cta hover:bg-cta/90 text-background font-medium px-5 py-2 rounded-lg transition-colors cursor-pointer flex items-center gap-2"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                            </svg>
+                            查询
+                        </button>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <span class="text-xs text-muted">快速测试:</span>
+                        <button type="button" class="quick-ip text-xs text-cta hover:text-cta/80 transition-colors cursor-pointer" data-ip="8.8.8.8">Google DNS</button>
+                        <span class="text-muted/30">|</span>
+                        <button type="button" class="quick-ip text-xs text-cta hover:text-cta/80 transition-colors cursor-pointer" data-ip="114.114.114.114">114 DNS</button>
+                        <span class="text-muted/30">|</span>
+                        <button type="button" class="quick-ip text-xs text-cta hover:text-cta/80 transition-colors cursor-pointer" data-ip="223.5.5.5">阿里DNS</button>
+                        <span class="text-muted/30">|</span>
+                        <button type="button" class="quick-ip text-xs text-cta hover:text-cta/80 transition-colors cursor-pointer" data-ip="240e:3b7:3272:d8d0:db09:c067:8d59:539e">中国电信IPv6</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+
+        <section id="resultSection" class="hidden mb-12">
+            <div class="bg-primary/50 backdrop-blur-sm border border-border rounded-2xl overflow-hidden">
+                <div class="px-6 py-4 border-b border-border flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <div class="w-2 h-2 rounded-full bg-cta animate-pulse-slow"></div>
+                        <span class="font-mono text-sm text-muted">查询结果</span>
+                    </div>
+                    <span id="ipVersion" class="text-xs px-2 py-1 rounded bg-secondary text-muted"></span>
+                </div>
+                <div id="resultContent" class="p-6">
+                </div>
+            </div>
+        </section>
+
+        <section class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-16">
+            <div class="bg-primary/30 border border-border rounded-xl p-5 card-hover cursor-default">
+                <div class="w-8 h-8 rounded-lg bg-cta/10 flex items-center justify-center mb-3">
+                    <svg class="w-4 h-4 text-cta" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                </div>
+                <h3 class="font-mono font-bold mb-1">10μs</h3>
+                <p class="text-sm text-muted">查询延迟</p>
+            </div>
+            <div class="bg-primary/30 border border-border rounded-xl p-5 card-hover cursor-default">
+                <div class="w-8 h-8 rounded-lg bg-cta/10 flex items-center justify-center mb-3">
+                    <svg class="w-4 h-4 text-cta" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <h3 class="font-mono font-bold mb-1">99.9%</h3>
+                <p class="text-sm text-muted">定位准确率</p>
+            </div>
+            <div class="bg-primary/30 border border-border rounded-xl p-5 card-hover cursor-default">
+                <div class="w-8 h-8 rounded-lg bg-cta/10 flex items-center justify-center mb-3">
+                    <svg class="w-4 h-4 text-cta" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <h3 class="font-mono font-bold mb-1">城市级</h3>
+                <p class="text-sm text-muted">国内定位精度</p>
+            </div>
+        </section>
+
+        <section class="mb-16">
+            <h2 class="font-mono text-xl font-bold mb-6 flex items-center gap-2">
+                <svg class="w-5 h-5 text-cta" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                </svg>
+                API 调用示例
+            </h2>
+            <div class="bg-primary/50 border border-border rounded-xl overflow-hidden">
+                <div class="px-4 py-3 border-b border-border flex items-center gap-2">
+                    <span class="w-3 h-3 rounded-full bg-red-500/80"></span>
+                    <span class="w-3 h-3 rounded-full bg-yellow-500/80"></span>
+                    <span class="w-3 h-3 rounded-full bg-green-500/80"></span>
+                    <span class="ml-2 text-xs text-muted font-mono">Terminal</span>
+                </div>
+                <div class="p-4 font-mono text-sm overflow-x-auto">
+                    <div class="text-muted mb-2"># 查询单个IP</div>
+                    <div class="text-text">
+                        <span class="text-cta">curl</span> "http://your-server:8000/api/v1/?ip=8.8.8.8"
+                    </div>
+                    <div class="mt-4 text-muted mb-2"># 批量查询</div>
+                    <div class="text-text">
+                        <span class="text-cta">curl</span> "http://your-server:8000/api/v1/batch?ips=8.8.8.8,114.114.114.114"
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer class="border-t border-border pt-8">
+            <div class="flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted">
+                <div class="flex items-center gap-4">
+                    <a href="/docs" class="hover:text-cta transition-colors cursor-pointer">API文档</a>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-cta"></span>
+                    <span>服务运行中</span>
+                </div>
+            </div>
+        </footer>
+    </main>
+
+    <script>
+        const API_BASE = window.location.origin;
+        
+        const queryForm = document.getElementById('queryForm');
+        const ipInput = document.getElementById('ipInput');
+        const resultSection = document.getElementById('resultSection');
+        const resultContent = document.getElementById('resultContent');
+        const ipVersion = document.getElementById('ipVersion');
+
+        /**
+         * 页面加载时自动查询用户IP
+         */
+        async function autoQueryMyIP() {
+            resultSection.classList.remove('hidden');
+            resultContent.innerHTML = `
+                <div class="flex items-center justify-center py-8">
+                    <div class="w-6 h-6 border-2 border-cta border-t-transparent rounded-full animate-spin"></div>
+                    <span class="ml-3 text-muted">正在获取您的IP...</span>
+                </div>
+            `;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/myip`);
+                const data = await response.json();
+
+                if (data.your_ip) {
+                    ipInput.value = data.your_ip;
+                    if (data.location) {
+                        renderResult({
+                            ip: data.your_ip,
+                            ip_version: data.your_ip.includes(':') ? 6 : 4,
+                            country: data.location.country || '-',
+                            province: data.location.province || '-',
+                            city: data.location.city || '-',
+                            isp: data.location.isp || '-',
+                            country_code: data.location.country_code || '-',
+                            is_china: data.location.is_china || false
+                        });
+                    } else {
+                        queryByIP(data.your_ip);
+                    }
+                } else {
+                    resultSection.classList.add('hidden');
+                }
+            } catch (error) {
+                resultSection.classList.add('hidden');
+            }
+        }
+
+        /**
+         * 根据IP查询详细信息
+         */
+        async function queryByIP(ip) {
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/?ip=${encodeURIComponent(ip)}`);
+                const data = await response.json();
+                if (data.code === 0 && data.data) {
+                    renderResult(data.data);
+                }
+            } catch (error) {
+                console.error('查询失败:', error);
+            }
+        }
+
+        document.querySelectorAll('.quick-ip').forEach(btn => {
+            btn.addEventListener('click', () => {
+                ipInput.value = btn.dataset.ip;
+                queryForm.dispatchEvent(new Event('submit'));
+            });
+        });
+
+        queryForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const ip = ipInput.value.trim();
+            if (!ip) return;
+
+            resultSection.classList.remove('hidden');
+            resultContent.innerHTML = `
+                <div class="flex items-center justify-center py-8">
+                    <div class="w-6 h-6 border-2 border-cta border-t-transparent rounded-full animate-spin"></div>
+                    <span class="ml-3 text-muted">查询中...</span>
+                </div>
+            `;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/v1/?ip=${encodeURIComponent(ip)}`);
+                const data = await response.json();
+
+                if (data.code === 0 && data.data) {
+                    renderResult(data.data);
+                } else {
+                    renderError(data.message || '查询失败');
+                }
+            } catch (error) {
+                renderError('网络错误，请检查服务是否运行');
+            }
+        });
+
+        function renderResult(data) {
+            ipVersion.textContent = `IPv${data.ip_version}`;
+            ipVersion.className = `text-xs px-2 py-1 rounded ${data.ip_version === 6 ? 'bg-blue-500/20 text-blue-400' : 'bg-cta/20 text-cta'}`;
+
+            const fields = [
+                { key: 'country', label: '国家/地区', icon: 'globe' },
+                { key: 'province', label: '省份', icon: 'map' },
+                { key: 'city', label: '城市', icon: 'building' },
+                { key: 'isp', label: '运营商', icon: 'server' },
+                { key: 'country_code', label: '国家代码', icon: 'flag' }
+            ];
+
+            const icons = {
+                globe: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+                map: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>',
+                building: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>',
+                server: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>',
+                flag: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6h-8.5l-1-1H5a2 2 0 00-2 2zm9-13.5V9"/>'
+            };
+
+            let html = `
+                <div class="mb-4 p-3 bg-background/50 rounded-lg border border-border">
+                    <div class="font-mono text-lg text-cta break-all">${data.ip}</div>
+                    ${data.is_china ? '<span class="inline-block mt-2 text-xs px-2 py-1 rounded bg-cta/20 text-cta">中国IP</span>' : ''}
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            `;
+
+            fields.forEach(field => {
+                const value = data[field.key] || '-';
+                html += `
+                    <div class="flex items-center gap-3 p-3 bg-background/30 rounded-lg animate-slide-up">
+                        <div class="w-8 h-8 rounded-lg bg-secondary/50 flex items-center justify-center flex-shrink-0">
+                            <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                ${icons[field.icon]}
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="text-xs text-muted mb-0.5">${field.label}</div>
+                            <div class="font-medium">${value}</div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            resultContent.innerHTML = html;
+        }
+
+        function renderError(message) {
+            resultContent.innerHTML = `
+                <div class="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                    <svg class="w-5 h-5 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <span class="text-red-400">${message}</span>
+                </div>
+            `;
+        }
+
+        // 页面加载完成后自动查询用户IP
+        document.addEventListener('DOMContentLoaded', autoQueryMyIP);
+    </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+version: '1.0'
+
+services:
+  ip-location-api:
+    build: .
+    container_name: ip-location-api
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=4
+      - CACHE_SIZE=10000
+      - CACHE_TTL=3600
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
