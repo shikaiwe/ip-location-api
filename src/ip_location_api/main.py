@@ -4,7 +4,6 @@ IP定位API服务入口
 """
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -14,8 +13,6 @@ from ip_location_api.config import config
 from ip_location_api.routes import router as api_router
 from ip_location_api.query import ip_engine
 
-
-STATIC_DIR = Path(__file__).parent / "static"
 
 API_DOCS_HTML = """
 <!DOCTYPE html>
@@ -479,11 +476,8 @@ async def api_docs():
 @app.get("/", response_class=HTMLResponse, tags=["Root"])
 async def root():
     """
-    根路径，返回Web界面
+    根路径，返回服务状态页面
     """
-    index_file = STATIC_DIR / "index.html"
-    if index_file.exists():
-        return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
     return HTMLResponse(content="""
     <!DOCTYPE html>
     <html>

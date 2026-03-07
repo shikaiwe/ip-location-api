@@ -80,40 +80,63 @@ class ErrorResponse(BaseModel):
 
 @router.get("/", response_model=IPLocationResponse, summary="查询IP地理位置")
 async def query_ip(
-    ip: str = Query(
-        ..., 
-        description="要查询的IP地址，支持IPv4和IPv6", 
+    request: Request,
+    ip: Optional[str] = Query(
+        None, 
+        description="要查询的IP地址，支持IPv4和IPv6。不传则自动查询客户端IP", 
         examples=["8.8.8.8", "114.114.114.114", "240e:3b7:3272:d8d0:db09:c067:8d59:539e"]
     )
 ) -> IPLocationResponse:
     """
     查询指定IP地址的地理位置信息
     
-    - **ip**: 要查询的IP地址，支持IPv4和IPv6格式
+    - **ip**: 要查询的IP地址，支持IPv4和IPv6格式（可选，不传则自动查询客户端IP）
     
     返回IP所属的国家、省份、城市、运营商等信息。
     - 国内IP可精确到城市级别
     - 国外IP精确到国家/省份级别
     - 自动识别IPv4/IPv6并使用对应数据库查询
+    - 不传ip参数时自动查询请求客户端的IP位置
     """
-    if not ip_engine.is_valid_ip(ip):
+    query_ip_addr = ip
+    
+    if not query_ip_addr:
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            query_ip_addr = forwarded_for.split(",")[0].strip()
+        
+        if not query_ip_addr:
+            real_ip = request.headers.get("X-Real-IP")
+            if real_ip:
+                query_ip_addr = real_ip.strip()
+        
+        if not query_ip_addr:
+            query_ip_addr = request.client.host if request.client else None
+        
+        if not query_ip_addr:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": 400, "message": "无法获取客户端IP地址", "data": None}
+            )
+    
+    if not ip_engine.is_valid_ip(query_ip_addr):
         raise HTTPException(
             status_code=400,
-            detail={"code": 400, "message": "无效的IP地址格式", "data": {"ip": ip}}
+            detail={"code": 400, "message": "无效的IP地址格式", "data": {"ip": query_ip_addr}}
         )
     
-    cached_result = ip_cache.get(ip)
+    cached_result = ip_cache.get(query_ip_addr)
     if cached_result:
         return IPLocationResponse(data=cached_result.to_dict())
     
-    result = ip_engine.query(ip)
+    result = ip_engine.query(query_ip_addr)
     if result is None:
         raise HTTPException(
             status_code=500,
-            detail={"code": 500, "message": "IP查询失败", "data": {"ip": ip}}
+            detail={"code": 500, "message": "IP查询失败", "data": {"ip": query_ip_addr}}
         )
     
-    ip_cache.set(ip, result)
+    ip_cache.set(query_ip_addr, result)
     
     return IPLocationResponse(data=result.to_dict())
 
