@@ -12,6 +12,12 @@ import time
 from ip_location_api.config import config
 from ip_location_api.routes import router as api_router
 from ip_location_api.query import ip_engine
+from ip_location_api.logger import LoggerManager, get_logger
+from ip_location_api.logging_middleware import RequestLoggingMiddleware, SlowRequestMiddleware
+
+
+LoggerManager.setup()
+logger = get_logger(__name__)
 
 
 API_DOCS_HTML = """
@@ -421,14 +427,18 @@ async def lifespan(app: FastAPI):
     
     启动时初始化资源，关闭时清理资源
     """
-    print(f"🚀 IP定位API服务启动中...")
-    print(f"📍 数据库路径: {config.DB_PATH}")
-    print(f"💾 缓存大小: {config.CACHE_SIZE}")
-    print(f"⏱️ 缓存TTL: {config.CACHE_TTL}秒")
+    logger.info_with_extra(
+        "IP定位API服务启动中",
+        db_path=str(config.DB_PATH),
+        cache_size=config.CACHE_SIZE,
+        cache_ttl=config.CACHE_TTL,
+        workers=config.WORKERS,
+        port=config.PORT
+    )
     
     yield
     
-    print("👋 IP定位API服务关闭中...")
+    logger.info("IP定位API服务关闭中")
     ip_engine.close()
 
 
@@ -448,6 +458,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(RequestLoggingMiddleware, exclude_paths=["/health", "/metrics"])
+app.add_middleware(SlowRequestMiddleware, threshold_ms=1000)
 
 
 @app.middleware("http")

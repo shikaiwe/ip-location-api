@@ -9,6 +9,10 @@ import time
 from cachetools import TTLCache
 
 from ip_location_api.config import config
+from ip_location_api.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -58,6 +62,7 @@ class IPQueryCache:
         self.ttl = ttl or config.CACHE_TTL
         self._cache = TTLCache(maxsize=self.max_size, ttl=self.ttl)
         self._stats = CacheStats(max_size=self.max_size)
+        logger.info_with_extra("缓存初始化完成", max_size=self.max_size, ttl=self.ttl)
     
     def get(self, key: str) -> Optional[Any]:
         """
@@ -72,9 +77,11 @@ class IPQueryCache:
         try:
             value = self._cache[key]
             self._stats.hits += 1
+            logger.debug_with_extra("缓存命中", key=key)
             return value
         except KeyError:
             self._stats.misses += 1
+            logger.debug_with_extra("缓存未命中", key=key)
             return None
     
     def set(self, key: str, value: Any) -> None:
@@ -87,6 +94,7 @@ class IPQueryCache:
         """
         self._cache[key] = value
         self._stats.size = len(self._cache)
+        logger.debug_with_extra("缓存设置", key=key, size=self._stats.size)
     
     def get_or_set(self, key: str, factory) -> Any:
         """
@@ -110,8 +118,10 @@ class IPQueryCache:
         """
         清空缓存
         """
+        old_size = len(self._cache)
         self._cache.clear()
         self._stats.size = 0
+        logger.info_with_extra("缓存已清空", cleared_count=old_size)
     
     def get_stats(self) -> CacheStats:
         """

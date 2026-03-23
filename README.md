@@ -8,6 +8,7 @@
 - **高准确率** - 国内 IP 精确到城市级别，准确率 99.9%+
 - **双栈支持** - 同时支持 IPv4 和 IPv6 地址查询
 - **智能缓存** - TTL 缓存机制，提升重复查询性能
+- **完善日志** - 结构化日志、按日期归档、自动清理
 - **开箱即用** - Docker 一键部署，无需复杂配置
 - **轻量纯净** - 无外部依赖，数据完全离线
 
@@ -24,7 +25,7 @@ cd ip-location-api
 docker-compose up -d
 
 # 访问服务
-# http://localhost:8000
+# http://localhost:30004
 ```
 
 ### 方式二：直接运行
@@ -51,7 +52,7 @@ python -m uvicorn ip_location_api.main:app --host 0.0.0.0 --port 8000 --app-dir 
 ### 查询单个 IP
 
 ```bash
-GET /api/v1/query?ip=8.8.8.8
+GET /api/v1/?ip=8.8.8.8
 ```
 
 **响应示例：**
@@ -62,9 +63,9 @@ GET /api/v1/query?ip=8.8.8.8
   "message": "success",
   "data": {
     "ip": "8.8.8.8",
-    "country": "美国",
-    "province": "加利福尼亚",
-    "city": "芒廷维尤",
+    "country": "United States",
+    "province": "California",
+    "city": "0",
     "isp": "Google LLC",
     "country_code": "US",
     "is_china": false,
@@ -115,6 +116,8 @@ GET /api/v1/stats
 
 通过环境变量或 `.env` 文件配置：
 
+### 基础配置
+
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `HOST` | `0.0.0.0` | 监听地址 |
@@ -123,12 +126,67 @@ GET /api/v1/stats
 | `CACHE_SIZE` | `10000` | 缓存容量 |
 | `CACHE_TTL` | `3600` | 缓存过期时间（秒） |
 
+### 日志配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LOG_LEVEL` | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR/FATAL） |
+| `LOG_DIR` | `logs` | 日志存储目录 |
+| `LOG_FILE_NAME` | `app.log` | 日志文件名 |
+| `LOG_BACKUP_COUNT` | `365` | 日志保留天数（默认一年） |
+| `LOG_FORMAT` | `json` | 日志格式（json/text） |
+| `LOG_TO_CONSOLE` | `true` | 是否输出到控制台 |
+| `LOG_TO_FILE` | `true` | 是否输出到文件 |
+
+## 日志系统
+
+### 日志格式
+
+采用简洁的 JSON 结构化格式：
+
+```json
+{"time": "2026-03-24 00:50:16", "level": "INFO", "logger": "routes", "msg": "IP查询成功", "req": "91961740", "ip": "8.8.8.8", "country": "United States"}
+```
+
+### 日志归档
+
+- **按日期轮转**：每天午夜自动切割
+- **目录结构**：`logs/年份/月份/日期/`
+- **保留策略**：默认保留一年，自动清理过期日志
+
+```
+logs/
+├── app.log                      # 当天日志
+├── error.log                    # 当天错误日志
+└── 2026/03/24/                  # 历史日志
+    ├── app.log
+    └── error.log
+```
+
+### 日志查询
+
+```bash
+# 查看当天日志
+tail -f logs/app.log
+
+# 按请求ID查询
+cat logs/app.log | jq 'select(.req == "91961740")'
+
+# 按级别过滤
+cat logs/app.log | jq 'select(.level == "ERROR")'
+
+# 查看历史日志
+cat logs/2026/03/23/app.log | jq .
+```
+
+详细使用说明请参考 [日志使用规范](docs/LOG_GUIDE.md)。
+
 ## 部署
 
 ### Docker Compose
 
 ```yaml
-version: '1.0'
+version: '3.8'
 services:
   ip-location-api:
     build: .
@@ -137,6 +195,10 @@ services:
     environment:
       - CACHE_SIZE=10000
       - CACHE_TTL=3600
+      - LOG_LEVEL=INFO
+      - LOG_BACKUP_COUNT=365
+    volumes:
+      - ./logs:/app/logs
     restart: unless-stopped
 ```
 
@@ -156,18 +218,21 @@ sudo systemctl start ip-location-api
 
 ```
 ip-location-api/
-├── data/                    # IP 数据库目录
-│   ├── ip2region_v4.xdb     # IPv4 数据库
-│   └── ip2region_v6.xdb     # IPv6 数据库
+├── data/                        # IP 数据库目录
+│   ├── ip2region_v4.xdb         # IPv4 数据库
+│   └── ip2region_v6.xdb         # IPv6 数据库
+├── docs/
+│   └── LOG_GUIDE.md             # 日志使用规范
 ├── src/
 │   └── ip_location_api/
-│       ├── main.py          # 应用入口
-│       ├── routes.py        # API 路由
-│       ├── query.py         # 查询引擎
-│       ├── cache.py         # 缓存模块
-│       ├── config.py        # 配置管理
-│       └── static/
-│           └── index.html   # Web 界面
+│       ├── main.py              # 应用入口
+│       ├── routes.py            # API 路由
+│       ├── query.py             # 查询引擎
+│       ├── cache.py             # 缓存模块
+│       ├── config.py            # 配置管理
+│       ├── logger.py            # 日志核心模块
+│       └── logging_middleware.py # 日志中间件
+├── logs/                        # 日志目录（运行时生成）
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt

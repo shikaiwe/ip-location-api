@@ -10,6 +10,10 @@ from typing import Optional, Literal
 from pathlib import Path
 
 from ip_location_api.config import config
+from ip_location_api.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -115,8 +119,11 @@ class IPQueryEngine:
                 if db_path and db_path.exists():
                     self._ipv4_buffer = util.load_content_from_file(str(db_path))
                     self._ipv4_searcher = xdb.new_with_buffer(util.IPv4, self._ipv4_buffer)
+                    logger.info_with_extra("IPv4数据库加载成功", db_path=str(db_path))
+                else:
+                    logger.warning("IPv4数据库文件不存在")
             except Exception as e:
-                pass
+                logger.error_with_extra("IPv4数据库加载失败", exc_info=True, error=str(e))
     
     def _init_ipv6_searcher(self):
         """
@@ -131,8 +138,11 @@ class IPQueryEngine:
                 if db_path and db_path.exists():
                     self._ipv6_buffer = util.load_content_from_file(str(db_path))
                     self._ipv6_searcher = xdb.new_with_buffer(util.IPv6, self._ipv6_buffer)
+                    logger.info_with_extra("IPv6数据库加载成功", db_path=str(db_path))
+                else:
+                    logger.warning("IPv6数据库文件不存在")
             except Exception as e:
-                pass
+                logger.error_with_extra("IPv6数据库加载失败", exc_info=True, error=str(e))
     
     def _parse_result(self, ip: str, result: str, ip_version: int) -> IPLocation:
         """
@@ -219,6 +229,7 @@ class IPQueryEngine:
             IPLocation: 定位结果，查询失败返回None
         """
         if not self.is_valid_ip(ip):
+            logger.debug_with_extra("无效的IP地址", ip=ip)
             return None
         
         ip_version = self.get_ip_version(ip)
@@ -238,6 +249,7 @@ class IPQueryEngine:
             return IPLocation(ip=ip, ip_version=ip_version)
             
         except Exception as e:
+            logger.error_with_extra("IP查询异常", exc_info=True, ip=ip, error=str(e))
             return None
     
     def close(self):

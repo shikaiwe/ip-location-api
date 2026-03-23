@@ -11,6 +11,10 @@ from typing import Optional
 
 from ip_location_api.query import ip_engine, IPLocation
 from ip_location_api.cache import ip_cache
+from ip_location_api.logger import get_logger
+
+
+logger = get_logger(__name__)
 
 
 router = APIRouter()
@@ -114,12 +118,14 @@ async def query_ip(
             query_ip_addr = request.client.host if request.client else None
         
         if not query_ip_addr:
+            logger.warning("无法获取客户端IP地址")
             raise HTTPException(
                 status_code=400,
                 detail={"code": 400, "message": "无法获取客户端IP地址", "data": None}
             )
     
     if not ip_engine.is_valid_ip(query_ip_addr):
+        logger.warning_with_extra("无效的IP地址格式", ip=query_ip_addr)
         raise HTTPException(
             status_code=400,
             detail={"code": 400, "message": "无效的IP地址格式", "data": {"ip": query_ip_addr}}
@@ -127,16 +133,19 @@ async def query_ip(
     
     cached_result = ip_cache.get(query_ip_addr)
     if cached_result:
+        logger.debug_with_extra("缓存命中", ip=query_ip_addr, cache_hit=True)
         return IPLocationResponse(data=cached_result.to_dict())
     
     result = ip_engine.query(query_ip_addr)
     if result is None:
+        logger.error_with_extra("IP查询失败", ip=query_ip_addr)
         raise HTTPException(
             status_code=500,
             detail={"code": 500, "message": "IP查询失败", "data": {"ip": query_ip_addr}}
         )
     
     ip_cache.set(query_ip_addr, result)
+    logger.info_with_extra("IP查询成功", ip=query_ip_addr, country=result.country, city=result.city)
     
     return IPLocationResponse(data=result.to_dict())
 
@@ -160,18 +169,23 @@ async def batch_query_ip(
     ip_list = [ip.strip() for ip in ips.split(",") if ip.strip()]
     
     if not ip_list:
+        logger.warning("批量查询IP列表为空")
         raise HTTPException(
             status_code=400,
             detail={"code": 400, "message": "IP地址列表不能为空"}
         )
     
     if len(ip_list) > 100:
+        logger.warning_with_extra("批量查询IP数量超限", count=len(ip_list))
         raise HTTPException(
             status_code=400,
             detail={"code": 400, "message": "单次最多查询100个IP地址"}
         )
     
+    logger.debug_with_extra("开始批量查询", ip_count=len(ip_list))
+    
     results = {}
+    cache_hits = 0
     for ip in ip_list:
         if not ip_engine.is_valid_ip(ip):
             results[ip] = {"error": "无效的IP地址格式"}
@@ -180,6 +194,7 @@ async def batch_query_ip(
         cached_result = ip_cache.get(ip)
         if cached_result:
             results[ip] = cached_result.to_dict()
+            cache_hits += 1
             continue
         
         result = ip_engine.query(ip)
@@ -188,6 +203,8 @@ async def batch_query_ip(
             results[ip] = result.to_dict()
         else:
             results[ip] = {"error": "查询失败"}
+    
+    logger.info_with_extra("批量查询完成", total=len(ip_list), cache_hits=cache_hits, success=len(results))
     
     return IPLocationResponse(data=results)
 
@@ -255,6 +272,7 @@ async def clear_cache() -> IPLocationResponse:
     清空所有已缓存的IP查询结果。
     """
     ip_cache.clear()
+    logger.info("缓存已清空")
     return IPLocationResponse(message="缓存已清空")
 
 

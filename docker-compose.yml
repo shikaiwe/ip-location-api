@@ -12,6 +12,14 @@ services:
       - WORKERS=4
       - CACHE_SIZE=10000
       - CACHE_TTL=3600
+      - LOG_LEVEL=INFO
+      - LOG_DIR=logs
+      - LOG_BACKUP_COUNT=365
+      - LOG_FORMAT=json
+      - LOG_TO_CONSOLE=true
+      - LOG_TO_FILE=true
+    volumes:
+      - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
