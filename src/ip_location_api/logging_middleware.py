@@ -11,7 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from ip_location_api.logger import (
-    get_logger, set_request_id, set_user_id, clear_context, LogContext
+    get_logger, set_request_id, clear_context
 )
 
 
@@ -210,46 +210,5 @@ class SlowRequestMiddleware(BaseHTTPMiddleware):
                 threshold_ms=self.threshold_ms,
                 client_ip=client_ip
             )
-        
-        return response
-
-
-class AccessLogMiddleware(BaseHTTPMiddleware):
-    """
-    访问日志中间件
-    
-    记录所有HTTP请求的访问日志，类似Nginx access log格式
-    """
-    
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        """
-        处理请求
-        
-        Args:
-            request: 请求对象
-            call_next: 下一个处理函数
-            
-        Returns:
-            Response: 响应对象
-        """
-        start_time = time.time()
-        client_ip = get_client_ip(request)
-        
-        response = await call_next(request)
-        
-        duration_ms = (time.time() - start_time) * 1000
-        
-        logger.info_with_extra(
-            "access_log",
-            client_ip=client_ip,
-            request_method=request.method,
-            request_path=request.url.path,
-            request_query=str(request.query_params) if request.query_params else None,
-            status_code=response.status_code,
-            response_size=response.headers.get("content-length", "-"),
-            duration_ms=round(duration_ms, 2),
-            user_agent=request.headers.get("User-Agent", "-"),
-            referer=request.headers.get("Referer", "-")
-        )
         
         return response

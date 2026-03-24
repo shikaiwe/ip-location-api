@@ -3,27 +3,9 @@ version: '3.8'
 services:
   ip-location-api:
     build: .
-    container_name: ip-location-api
     ports:
       - "30004:8000"
-    environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - WORKERS=4
-      - CACHE_SIZE=10000
-      - CACHE_TTL=3600
-      - LOG_LEVEL=INFO
-      - LOG_DIR=logs
-      - LOG_BACKUP_COUNT=365
-      - LOG_FORMAT=json
-      - LOG_TO_CONSOLE=true
-      - LOG_TO_FILE=true
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data:ro
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s

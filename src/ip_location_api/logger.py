@@ -3,23 +3,22 @@
 提供完善的日志记录机制，支持分级日志、结构化格式、日志轮转、敏感信息脱敏等功能
 """
 
+import gzip
 import logging
 import logging.handlers
 import json
 import os
 import re
+import shutil
 import sys
-import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from functools import lru_cache
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 
 request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
-user_id_var: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
 
 
 @dataclass
@@ -208,6 +207,113 @@ class SensitiveDataFilter:
             result = pattern.sub(replacement, result)
         
         return result
+
+
+class LineRotatingFileHandler(logging.Handler):
+    """
+    按行分割的日志处理器
+    
+    特性：
+    - 单文件最大500KB
+    - 按行分割，不截断完整日志
+    - 文件命名：app.log, app1.log, app2.log...
+    """
+    
+    def __init__(self, base_path: str, max_bytes: int = 500 * 1024, backup_count: int = 99, encoding: str = "utf-8"):
+        """
+        初始化处理器
+        
+        Args:
+            base_path: 基础日志文件路径
+            max_bytes: 单文件最大字节数
+            backup_count: 最大备份数量
+            encoding: 文件编码
+        """
+        super().__init__()
+        self.base_path = Path(base_path)
+        self.max_bytes = max_bytes
+        self.backup_count = backup_count
+        self.encoding = encoding
+        self.current_index = 0
+        self.current_file = None
+        self.current_size = 0
+        self._open_file()
+    
+    def _get_log_path(self, index: int) -> Path:
+        """
+        获取指定索引的日志文件路径
+        
+        Args:
+            index: 文件索引（0为当前日志）
+            
+        Returns:
+            Path: 日志文件路径
+        """
+        if index == 0:
+            return self.base_path
+        stem = self.base_path.stem
+        suffix = self.base_path.suffix
+        return self.base_path.parent / f"{stem}{index}{suffix}"
+    
+    def _open_file(self):
+        """
+        打开当前日志文件
+        """
+        if self.current_file:
+            self.current_file.close()
+        
+        log_path = self._get_log_path(self.current_index)
+        self.current_file = open(log_path, 'a', encoding=self.encoding)
+        self.current_size = log_path.stat().st_size if log_path.exists() else 0
+    
+    def _rotate(self):
+        """
+        执行日志分割
+        """
+        self.current_file.close()
+        self.current_index += 1
+        
+        if self.current_index > self.backup_count:
+            oldest = self._get_log_path(self.backup_count)
+            if oldest.exists():
+                oldest.unlink()
+            for i in range(self.backup_count, 0, -1):
+                src = self._get_log_path(i - 1)
+                dst = self._get_log_path(i)
+                if src.exists():
+                    src.rename(dst)
+            self.current_index = 0
+        
+        self._open_file()
+    
+    def emit(self, record: logging.LogRecord):
+        """
+        写入日志记录
+        
+        Args:
+            record: 日志记录对象
+        """
+        try:
+            msg = self.format(record) + '\n'
+            msg_bytes = len(msg.encode(self.encoding))
+            
+            if self.current_size + msg_bytes > self.max_bytes and self.current_size > 0:
+                self._rotate()
+            
+            self.current_file.write(msg)
+            self.current_file.flush()
+            self.current_size += msg_bytes
+            
+        except Exception:
+            self.handleError(record)
+    
+    def close(self):
+        """
+        关闭处理器
+        """
+        if self.current_file:
+            self.current_file.close()
+        super().close()
 
 
 class StructuredFormatter(logging.Formatter):
@@ -441,10 +547,32 @@ class LoggerManager:
             log_dir = Path(config.LOG_DIR)
             log_dir.mkdir(parents=True, exist_ok=True)
             
-            log_file = log_dir / config.LOG_FILE_NAME
+            current_log_file = log_dir / config.LOG_FILE_NAME
             
+            current_file_handler = LineRotatingFileHandler(
+                base_path=str(current_log_file),
+                max_bytes=500 * 1024,
+                backup_count=99,
+                encoding="utf-8"
+            )
+            current_file_handler.setLevel(LogLevel.LEVEL_NAMES.get(config.LOG_LEVEL.upper(), LogLevel.INFO))
+            current_file_handler.setFormatter(StructuredFormatter())
+            root_logger.addHandler(current_file_handler)
+            
+            current_error_file = log_dir / "error.log"
+            current_error_handler = LineRotatingFileHandler(
+                base_path=str(current_error_file),
+                max_bytes=500 * 1024,
+                backup_count=99,
+                encoding="utf-8"
+            )
+            current_error_handler.setLevel(LogLevel.ERROR)
+            current_error_handler.setFormatter(StructuredFormatter())
+            root_logger.addHandler(current_error_handler)
+            
+            archive_log_file = log_dir / "archive.log"
             file_handler = logging.handlers.TimedRotatingFileHandler(
-                filename=str(log_file),
+                filename=str(archive_log_file),
                 when="midnight",
                 interval=1,
                 backupCount=config.LOG_BACKUP_COUNT,
@@ -455,12 +583,11 @@ class LoggerManager:
             file_handler.rotator = cls._rotator
             file_handler.setLevel(LogLevel.LEVEL_NAMES.get(config.LOG_LEVEL.upper(), LogLevel.INFO))
             file_handler.setFormatter(StructuredFormatter())
-            
             root_logger.addHandler(file_handler)
             
-            error_log_file = log_dir / "error.log"
+            archive_error_file = log_dir / "archive_error.log"
             error_handler = logging.handlers.TimedRotatingFileHandler(
-                filename=str(error_log_file),
+                filename=str(archive_error_file),
                 when="midnight",
                 interval=1,
                 backupCount=config.LOG_BACKUP_COUNT,
@@ -471,7 +598,6 @@ class LoggerManager:
             error_handler.rotator = cls._rotator
             error_handler.setLevel(LogLevel.ERROR)
             error_handler.setFormatter(StructuredFormatter())
-            
             root_logger.addHandler(error_handler)
         
         cls._initialized = True
@@ -515,6 +641,8 @@ class LoggerManager:
         """
         日志文件轮转器
         
+        整合所有分割日志文件并压缩归档
+        
         Args:
             source: 源文件路径
             dest: 目标文件路径
@@ -523,10 +651,50 @@ class LoggerManager:
         if not os.path.exists(dest_dir):
             os.makedirs(dest_dir, exist_ok=True)
         
+        source_dir = os.path.dirname(source)
+        
+        log_files = []
+        if "archive_error" in source:
+            main_log = os.path.join(source_dir, "error.log")
+            if os.path.exists(main_log):
+                log_files.append(main_log)
+            for i in range(1, 100):
+                split_file = os.path.join(source_dir, f"error{i}.log")
+                if os.path.exists(split_file):
+                    log_files.append(split_file)
+                else:
+                    break
+        else:
+            main_log = os.path.join(source_dir, "app.log")
+            if os.path.exists(main_log):
+                log_files.append(main_log)
+            for i in range(1, 100):
+                split_file = os.path.join(source_dir, f"app{i}.log")
+                if os.path.exists(split_file):
+                    log_files.append(split_file)
+                else:
+                    break
+        
         if os.path.exists(source):
-            if os.path.exists(dest):
-                os.remove(dest)
-            os.rename(source, dest)
+            log_files.insert(0, source)
+        
+        if not log_files:
+            return
+        
+        try:
+            dest_gzip = dest + ".zip"
+            with gzip.open(dest_gzip, 'wb') as f_out:
+                for log_file in log_files:
+                    if os.path.exists(log_file):
+                        with open(log_file, 'rb') as f_in:
+                            shutil.copyfileobj(f_in, f_out)
+            
+            for log_file in log_files:
+                if os.path.exists(log_file):
+                    os.remove(log_file)
+                    
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"压缩日志失败：{e}")
     
     @classmethod
     def get_logger(cls, name: str) -> IPLogger:
@@ -579,16 +747,6 @@ def set_request_id(request_id: str):
     request_id_var.set(request_id)
 
 
-def set_user_id(user_id: str):
-    """
-    设置当前用户ID
-    
-    Args:
-        user_id: 用户ID
-    """
-    user_id_var.set(user_id)
-
-
 def get_request_id() -> Optional[str]:
     """
     获取当前请求ID
@@ -599,70 +757,8 @@ def get_request_id() -> Optional[str]:
     return request_id_var.get()
 
 
-def get_user_id() -> Optional[str]:
-    """
-    获取当前用户ID
-    
-    Returns:
-        Optional[str]: 用户ID
-    """
-    return user_id_var.get()
-
-
 def clear_context():
     """
     清除上下文变量
     """
     request_id_var.set(None)
-    user_id_var.set(None)
-
-
-class LogContext:
-    """
-    日志上下文管理器
-    
-    用于临时设置请求ID和用户ID
-    """
-    
-    def __init__(self, request_id: str = None, user_id: str = None):
-        """
-        初始化上下文管理器
-        
-        Args:
-            request_id: 请求ID
-            user_id: 用户ID
-        """
-        self.request_id = request_id
-        self.user_id = user_id
-        self._old_request_id = None
-        self._old_user_id = None
-    
-    def __enter__(self):
-        """
-        进入上下文
-        """
-        self._old_request_id = get_request_id()
-        self._old_user_id = get_user_id()
-        
-        if self.request_id:
-            set_request_id(self.request_id)
-        if self.user_id:
-            set_user_id(self.user_id)
-        
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        退出上下文
-        """
-        if self._old_request_id:
-            set_request_id(self._old_request_id)
-        else:
-            request_id_var.set(None)
-        
-        if self._old_user_id:
-            set_user_id(self._old_user_id)
-        else:
-            user_id_var.set(None)
-        
-        return False

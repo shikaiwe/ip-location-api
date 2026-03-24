@@ -20,15 +20,11 @@ class Config:
         HOST: 服务监听地址
         PORT: 服务监听端口
         WORKERS: 工作进程数
-        CACHE_SIZE: 缓存大小
-        CACHE_TTL: 缓存过期时间(秒)
         DB_PATH: IP数据库文件路径
     """
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
     WORKERS: int = int(os.getenv("WORKERS", "4"))
-    CACHE_SIZE: int = int(os.getenv("CACHE_SIZE", "10000"))
-    CACHE_TTL: int = int(os.getenv("CACHE_TTL", "3600"))
     
     BASE_DIR: Path = Path(__file__).parent.parent.parent
     DB_PATH: Path = BASE_DIR / "data" / "ip2region.xdb"

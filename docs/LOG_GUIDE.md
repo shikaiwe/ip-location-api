@@ -4,19 +4,19 @@
 
 本文档定义了 IP Location API 项目的日志使用规范，确保开发团队能够统一、高效地使用日志功能进行问题排查和系统监控。
 
----
+***
 
 ## 1. 日志级别使用规范
 
 ### 1.1 级别定义
 
-| 级别 | 用途 | 示例场景 |
-|------|------|----------|
-| DEBUG | 调试信息，详细的程序运行状态 | 缓存命中/未命中、详细参数值 |
-| INFO | 正常业务流程日志 | 服务启动、请求处理完成、业务操作成功 |
-| WARNING | 警告信息，不影响系统运行但需要关注 | 慢请求、参数校验失败、降级处理 |
-| ERROR | 错误信息，影响业务流程但系统可继续运行 | 查询失败、外部服务异常 |
-| FATAL | 严重错误，导致系统无法继续运行 | 数据库连接失败、关键配置缺失 |
+| 级别      | 用途                  | 示例场景               |
+| ------- | ------------------- | ------------------ |
+| DEBUG   | 调试信息，详细的程序运行状态      | 缓存命中/未命中、详细参数值     |
+| INFO    | 正常业务流程日志            | 服务启动、请求处理完成、业务操作成功 |
+| WARNING | 警告信息，不影响系统运行但需要关注   | 慢请求、参数校验失败、降级处理    |
+| ERROR   | 错误信息，影响业务流程但系统可继续运行 | 查询失败、外部服务异常        |
+| FATAL   | 严重错误，导致系统无法继续运行     | 数据库连接失败、关键配置缺失     |
 
 ### 1.2 级别选择原则
 
@@ -33,7 +33,7 @@ logger.error("缓存未命中")  # 不应该是ERROR级别
 logger.info("发生异常")  # 异常应该是ERROR或WARNING
 ```
 
----
+***
 
 ## 2. 结构化日志规范
 
@@ -41,14 +41,14 @@ logger.info("发生异常")  # 异常应该是ERROR或WARNING
 
 每条日志自动包含以下字段：
 
-| 字段 | 说明 | 来源 |
-|------|------|------|
-| time | 本地时间（年-月-日 时:分:秒） | 自动生成 |
-| level | 日志级别 | 自动生成 |
-| logger | 日志器名称（简短） | 自动生成 |
-| msg | 日志消息 | 必填 |
-| req | 请求ID（前8位） | 中间件自动注入 |
-| 其他字段 | 业务数据 | 手动传入 |
+| 字段     | 说明                | 来源      |
+| ------ | ----------------- | ------- |
+| time   | 本地时间（年-月-日 时:分:秒） | 自动生成    |
+| level  | 日志级别              | 自动生成    |
+| logger | 日志器名称（简短）         | 自动生成    |
+| msg    | 日志消息              | 必填      |
+| req    | 请求ID（前8位）         | 中间件自动注入 |
+| 其他字段   | 业务数据              | 手动传入    |
 
 ### 2.2 使用额外数据
 
@@ -72,7 +72,7 @@ logger.info(f"IP查询成功: ip=8.8.8.8, country=美国")
 {"time": "2026-03-24 00:50:16", "level": "INFO", "logger": "routes", "msg": "IP查询成功", "req": "91961740", "ip": "8.8.8.8", "country": "United States", "city": "0"}
 ```
 
----
+***
 
 ## 3. 敏感信息脱敏
 
@@ -81,14 +81,14 @@ logger.info(f"IP查询成功: ip=8.8.8.8, country=美国")
 系统自动脱敏以下字段：
 
 - password / passwd / pwd
-- token / access_token / refresh_token
-- api_key / apikey
+- token / access\_token / refresh\_token
+- api\_key / apikey
 - secret
 - authorization
 - credential
-- private_key
-- session_id
-- credit_card
+- private\_key
+- session\_id
+- credit\_card
 
 ### 3.2 手动脱敏
 
@@ -124,7 +124,7 @@ id_card = SensitiveDataFilter.mask_id_card("110101199001011234")
 # 结果: "110101********1234"
 ```
 
----
+***
 
 ## 4. 异常日志规范
 
@@ -163,7 +163,7 @@ except Exception as e:
 }
 ```
 
----
+***
 
 ## 5. 请求追踪
 
@@ -179,19 +179,13 @@ X-Response-Time: 20.21ms
 ### 5.2 手动设置上下文
 
 ```python
-from ip_location_api.logger import set_request_id, set_user_id, LogContext
+from ip_location_api.logger import set_request_id
 
-# 方式一：直接设置
+# 直接设置
 set_request_id("custom-request-id")
-set_user_id("user-123")
-
-# 方式二：使用上下文管理器（推荐）
-with LogContext(request_id="req-001", user_id="user-123"):
-    logger.info("处理用户请求")
-    # 此范围内所有日志自动包含request_id和user_id
 ```
 
----
+***
 
 ## 6. 日志配置
 
@@ -220,31 +214,38 @@ LOG_TO_CONSOLE=true
 LOG_TO_FILE=true
 ```
 
-### 6.2 日志文件轮转与归档
+### 6.2 日志文件分割与归档
 
-- **按日期轮转**：每天午夜自动切割，生成新日志文件
-- **目录结构**：年份/月份/日期 三级目录
-- **保留策略**：最多保留 `LOG_BACKUP_COUNT` 天的日志（默认365天，即一年）
-- **自动清理**：超过保留期限的日志自动删除
-- **错误日志**：ERROR及以上级别单独存储到 `error.log`
+**分割策略**：
+
+- 单文件最大 500KB
+- 按行分割，不截断完整日志
+- 文件命名：`app.log` → `app1.log` → `app2.log`...
+
+**归档策略**：
+
+- 每天午夜自动归档
+- 整合所有分割文件压缩为 `.zip` 格式
+- 目录结构：`logs/年份/月份/日期/`
+- 超过保留期限自动删除
 
 ### 6.3 日志目录结构
 
 ```
 logs/
-├── app.log                      # 当天全量日志
-├── error.log                    # 当天错误日志
+├── app.log                      # 当前日志（最大500KB）
+├── app1.log                     # 分割文件1
+├── app2.log                     # 分割文件2
+├── error.log                    # 当前错误日志
+├── error1.log                   # 错误分割文件1
 └── 2026/                        # 年份
     └── 03/                      # 月份
-        ├── 23/                  # 日期
-        │   ├── app.log
-        │   └── error.log
-        └── 24/
-            ├── app.log
-            └── error.log
+        └── 24/                  # 日期
+            ├── archive.log.zip      # 整合压缩的历史日志
+            └── archive_error.log.zip
 ```
 
----
+***
 
 ## 7. 性能监控日志
 
@@ -272,7 +273,7 @@ logger.info_with_extra(
 )
 ```
 
----
+***
 
 ## 8. 日志查询与分析
 
@@ -303,11 +304,11 @@ cat logs/app.log | jq 'select(.time >= "2026-03-24 10:00:00" and .time <= "2026-
 ### 8.4 查询历史日志
 
 ```bash
-# 查询指定日期的日志
-cat logs/2026/03/23/app.log | jq .
+# 解压并查看历史日志
+gunzip -c logs/2026/03/23/archive.log.zip | jq .
 ```
 
----
+***
 
 ## 9. 最佳实践
 
@@ -354,7 +355,7 @@ except:
     pass  # 吞掉异常，无法排查问题
 ```
 
----
+***
 
 ## 10. 监控系统集成
 
@@ -379,21 +380,7 @@ output {
 }
 ```
 
-### 10.2 Prometheus 指标提取
-
-可从日志中提取指标：
-
-```python
-# 在关键业务点记录指标
-logger.info_with_extra(
-    "业务指标",
-    metric_type="query_count",
-    metric_value=1,
-    labels={"country": "中国", "ip_version": 4}
-)
-```
-
----
+***
 
 ## 11. 常见问题
 
@@ -410,15 +397,21 @@ LOG_TO_CONSOLE=true
 LOG_TO_FILE=false
 ```
 
-### Q3: 日志丢失request_id？
+### Q3: 日志丢失request\_id？
 
 确保请求经过 `RequestLoggingMiddleware` 中间件。
 
 ### Q4: 如何查看历史日志？
 
-历史日志按日期存储在 `logs/年份/月份/日期/` 目录下。
+```bash
+# 解压历史日志
+gunzip -c logs/2026/03/23/archive.log.zip > history.log
+cat history.log | jq .
+```
 
----
+<br />
+
+***
 
 ## 12. 快速参考
 
@@ -441,9 +434,7 @@ logger.error_with_extra("错误", exc_info=True)
 logger.exception_with_extra("异常")
 
 # 上下文设置
-from ip_location_api.logger import set_request_id, LogContext
+from ip_location_api.logger import set_request_id
 set_request_id("req-001")
-
-with LogContext(request_id="req-001"):
-    logger.info("带上下文的日志")
 ```
+
