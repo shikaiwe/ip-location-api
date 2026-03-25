@@ -1,12 +1,13 @@
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-RUN pip install --no-cache-dir -e .
+RUN pip install -e .
 
 FROM python:3.11-slim
 
@@ -16,10 +17,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-COPY --from=builder /root/.local /root/.local
+COPY --from=builder /app /app
 COPY data/ ./data/
-COPY --from=builder /app/src ./src/
-COPY --from=builder /app/pyproject.toml ./
 
 EXPOSE 8000
 
