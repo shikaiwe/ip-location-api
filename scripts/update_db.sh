@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # IP数据库自动更新脚本
-# 定期检查并更新 qqwry.ipdb 数据库文件
+# 定期检查并更新 qqwry.ipdb 和 ip2region 数据库文件
 #
 # 使用方法：
 #   chmod +x scripts/update_db.sh
@@ -21,8 +21,13 @@ BACKUP_DIR="$PROJECT_DIR/data/backup"
 LOG_FILE="$PROJECT_DIR/logs/update.log"
 
 # 数据库仓库配置
-QQWRY_REPO="https://github.com/nmgliangwei/qqwry.ipdb"
 QQWRY_RAW="https://cdn.bili33.top/gh/nmgliangwei/qqwry.ipdb@main/qqwry.ipdb"
+IP2REGION_V4_RAW="https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb"
+IP2REGION_V6_RAW="https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v6.xdb"
+
+# CDN备用地址
+IP2REGION_V4_CDN="https://cdn.jsdelivr.net/gh/lionsoul2014/ip2region@master/data/ip2region_v4.xdb"
+IP2REGION_V6_CDN="https://cdn.jsdelivr.net/gh/lionsoul2014/ip2region@master/data/ip2region_v6.xdb"
 
 # 日志函数
 log() {
@@ -32,37 +37,41 @@ log() {
 # 创建必要目录
 mkdir -p "$DATA_DIR" "$BACKUP_DIR" "$(dirname "$LOG_FILE")"
 
-# 获取远程文件信息
+# 获取远程文件大小
 get_remote_size() {
-    curl -sI "$1" | grep -i content-length | awk '{print $2}' | tr -d '\r'
+    curl -sI "$1" 2>/dev/null | grep -i content-length | awk '{print $2}' | tr -d '\r'
 }
 
-get_remote_modified() {
-    curl -sI "$1" | grep -i last-modified | cut -d: -f2- | xargs
-}
-
-# 检查并更新 qqwry.ipdb
-update_qqwry() {
-    local db_file="$DATA_DIR/qqwry.ipdb"
-    local temp_file="$DATA_DIR/qqwry.ipdb.tmp"
+# 通用数据库更新函数
+# 参数: $1=数据库名称, $2=远程URL, $3=本地文件名, $4=备用URL(可选)
+update_database() {
+    local db_name="$1"
+    local remote_url="$2"
+    local db_file="$DATA_DIR/$3"
+    local temp_file="$DATA_DIR/$3.tmp"
+    local backup_url="${4:-}"
     
-    log "检查 qqwry.ipdb 更新..."
+    log "检查 $db_name 更新..."
     
     # 获取远程文件大小
-    remote_size=$(get_remote_size "$QQWRY_RAW")
+    local remote_size=$(get_remote_size "$remote_url")
+    
+    # 如果主地址失败，尝试备用地址
+    if [ -z "$remote_size" ] && [ -n "$backup_url" ]; then
+        log "主地址无法访问，尝试备用地址..."
+        remote_size=$(get_remote_size "$backup_url")
+        remote_url="$backup_url"
+    fi
     
     if [ -z "$remote_size" ]; then
-        log "警告：无法获取远程文件大小，跳过检查"
+        log "警告：无法获取远程文件大小，跳过 $db_name 检查"
         return 1
     fi
     
     # 获取本地文件大小
+    local local_size=0
     if [ -f "$db_file" ]; then
         local_size=$(stat -c%s "$db_file" 2>/dev/null || stat -f%z "$db_file" 2>/dev/null)
-        local_modified=$(stat -c%y "$db_file" 2>/dev/null || stat -f "%Sm" "$db_file" 2>/dev/null)
-    else
-        local_size=0
-        local_modified="不存在"
     fi
     
     log "本地文件大小: $local_size bytes"
@@ -70,7 +79,7 @@ update_qqwry() {
     
     # 比较文件大小
     if [ "$local_size" = "$remote_size" ]; then
-        log "qqwry.ipdb 已是最新版本，无需更新"
+        log "$db_name 已是最新版本，无需更新"
         return 0
     fi
     
@@ -78,23 +87,23 @@ update_qqwry() {
     
     # 备份旧文件
     if [ -f "$db_file" ]; then
-        backup_file="$BACKUP_DIR/qqwry.ipdb.$(date '+%Y%m%d_%H%M%S')"
+        local backup_file="$BACKUP_DIR/$3.$(date '+%Y%m%d_%H%M%S')"
         cp "$db_file" "$backup_file"
         log "已备份旧文件到: $backup_file"
     fi
     
     # 下载新文件
-    if curl -L --progress-bar -o "$temp_file" "$QQWRY_RAW"; then
+    if curl -L --progress-bar -o "$temp_file" "$remote_url" 2>/dev/null; then
         # 验证下载
-        downloaded_size=$(stat -c%s "$temp_file" 2>/dev/null || stat -f%z "$temp_file" 2>/dev/null)
+        local downloaded_size=$(stat -c%s "$temp_file" 2>/dev/null || stat -f%z "$temp_file" 2>/dev/null)
         
         if [ "$downloaded_size" = "$remote_size" ]; then
             mv "$temp_file" "$db_file"
-            log "qqwry.ipdb 更新成功！"
+            log "$db_name 更新成功！"
             log "新文件大小: $downloaded_size bytes"
             
             # 清理旧备份（保留最近5个）
-            cd "$BACKUP_DIR" && ls -t qqwry.ipdb.* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
+            cd "$BACKUP_DIR" && ls -t "$3".* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
             
             return 0
         else
@@ -109,12 +118,29 @@ update_qqwry() {
     fi
 }
 
+# 更新 qqwry.ipdb
+update_qqwry() {
+    update_database "qqwry.ipdb" "$QQWRY_RAW" "qqwry.ipdb"
+}
+
+# 更新 ip2region IPv4 数据库
+update_ip2region_v4() {
+    update_database "ip2region_v4.xdb" "$IP2REGION_V4_RAW" "ip2region_v4.xdb" "$IP2REGION_V4_CDN"
+}
+
+# 更新 ip2region IPv6 数据库
+update_ip2region_v6() {
+    update_database "ip2region_v6.xdb" "$IP2REGION_V6_RAW" "ip2region_v6.xdb" "$IP2REGION_V6_CDN"
+}
+
 # 主函数
 main() {
     log "========== 开始数据库更新检查 =========="
     
-    # 更新 qqwry.ipdb
+    # 更新各个数据库
     update_qqwry
+    update_ip2region_v4
+    update_ip2region_v6
     
     log "========== 数据库更新检查完成 =========="
     log ""
