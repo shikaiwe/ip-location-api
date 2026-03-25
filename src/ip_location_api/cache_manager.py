@@ -1,13 +1,15 @@
 """
 缓存管理模块
 提供统一的缓存管理功能，支持TTL过期策略、键命名规范、错误处理等
+性能优化：使用msgpack二进制序列化，提升缓存读写效率
 """
 
 import threading
 import time
+import msgpack
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Optional, Generic, TypeVar, Callable
+from dataclasses import dataclass, is_dataclass
+from typing import Any, Optional, Generic, TypeVar, Callable, Dict, Type
 from enum import Enum
 
 from cachetools import TTLCache
@@ -19,6 +21,178 @@ logger = get_logger(__name__)
 
 
 T = TypeVar('T')
+
+
+class TypeRegistry:
+    """
+    类型注册表
+    
+    用于在反序列化时动态解析类型，避免硬编码依赖
+    """
+    
+    _dataclass_registry: Dict[str, Type] = {}
+    _enum_registry: Dict[str, Type] = {}
+    
+    @classmethod
+    def register_dataclass(cls, type_class: Type) -> None:
+        """
+        注册数据类
+        
+        Args:
+            type_class: 数据类类型
+        """
+        cls._dataclass_registry[type_class.__name__] = type_class
+    
+    @classmethod
+    def register_enum(cls, type_class: Type) -> None:
+        """
+        注册枚举类
+        
+        Args:
+            type_class: 枚举类类型
+        """
+        cls._enum_registry[type_class.__name__] = type_class
+    
+    @classmethod
+    def get_dataclass(cls, name: str) -> Optional[Type]:
+        """
+        获取已注册的数据类
+        
+        Args:
+            name: 类名
+            
+        Returns:
+            Optional[Type]: 数据类类型
+        """
+        return cls._dataclass_registry.get(name)
+    
+    @classmethod
+    def get_enum(cls, name: str) -> Optional[Type]:
+        """
+        获取已注册的枚举类
+        
+        Args:
+            name: 类名
+            
+        Returns:
+            Optional[Type]: 枚举类类型
+        """
+        return cls._enum_registry.get(name)
+
+
+def _serialize_value(value: Any) -> Any:
+    """
+    序列化值以便msgpack存储
+    
+    Args:
+        value: 待序列化的值
+        
+    Returns:
+        Any: 序列化后的值
+    """
+    if value is None:
+        return None
+    
+    if is_dataclass(value):
+        return ("__dataclass__", type(value).__name__, _dataclass_to_dict(value))
+    
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    
+    if isinstance(value, (list, tuple)):
+        return [_serialize_value(item) for item in value]
+    
+    if isinstance(value, Enum):
+        return ("__enum__", type(value).__name__, value.value)
+    
+    return value
+
+
+def _dataclass_to_dict(obj: Any) -> dict:
+    """
+    将 dataclass 递归转换为字典
+    
+    Args:
+        obj: dataclass 对象
+        
+    Returns:
+        dict: 转换后的字典
+    """
+    if is_dataclass(obj):
+        result = {}
+        for field_name in obj.__dataclass_fields__:
+            field_value = getattr(obj, field_name)
+            result[field_name] = _serialize_value(field_value)
+        return result
+    return obj
+
+
+def _deserialize_value(value: Any) -> Any:
+    """
+    反序列化msgpack数据
+    
+    使用类型注册表动态解析类型，避免硬编码依赖
+    
+    Args:
+        value: 待反序列化的值
+        
+    Returns:
+        Any: 反序列化后的值
+    """
+    if value is None:
+        return None
+    
+    if isinstance(value, list):
+        if len(value) == 3:
+            first = value[0]
+            if isinstance(first, str) and first in ("__dataclass__", "__enum__"):
+                if value[0] == "__dataclass__":
+                    cls_name = value[1]
+                    data = value[2]
+                    
+                    type_class = TypeRegistry.get_dataclass(cls_name)
+                    if type_class is not None:
+                        return type_class(**_deserialize_value(data))
+                    
+                    logger.error_with_extra("未注册的数据类类型", type_name=cls_name)
+                    raise CacheValueError(
+                        f"未注册的数据类类型: {cls_name}。"
+                        f"请确保在应用启动时调用 register_fusion_types() 或手动注册该类型。"
+                    )
+                
+                if value[0] == "__enum__":
+                    cls_name = value[1]
+                    enum_value = value[2]
+                    
+                    enum_class = TypeRegistry.get_enum(cls_name)
+                    if enum_class is not None:
+                        return enum_class(enum_value)
+                    
+                    logger.error_with_extra("未注册的枚举类型", type_name=cls_name)
+                    raise CacheValueError(
+                        f"未注册的枚举类型: {cls_name}。"
+                        f"请确保在应用启动时调用 register_fusion_types() 或手动注册该类型。"
+                    )
+        
+        return [_deserialize_value(item) for item in value]
+    
+    if isinstance(value, dict):
+        return {k: _deserialize_value(v) for k, v in value.items()}
+    
+    return value
+
+
+def register_fusion_types():
+    """
+    注册融合模块的类型
+    
+    由 fusion.py 在初始化时调用，避免循环导入
+    """
+    from ip_location_api.fusion import FusedLocation, LocationSource, AccuracyLevel
+    
+    TypeRegistry.register_dataclass(FusedLocation)
+    TypeRegistry.register_dataclass(LocationSource)
+    TypeRegistry.register_enum(AccuracyLevel)
 
 
 class CacheError(Exception):
@@ -109,7 +283,7 @@ class CacheKeyBuilder:
         return value.replace(" ", "_").replace(":", "_").replace("\n", "")
 
 
-@dataclass
+@dataclass(slots=True)
 class CacheStats:
     """
     缓存统计数据
@@ -243,13 +417,25 @@ class TTLCacheBackend(CacheBackend[T]):
     基于TTL的内存缓存后端
     
     使用cachetools.TTLCache实现，支持自动过期
+    性能优化：
+    - 使用__slots__减少实例内存占用
+    - 使用msgpack紧凑二进制格式减小缓存体积
+    版本管理：
+    - 支持缓存格式版本，自动检测和迁移
     """
+    
+    __slots__ = ('_cache', '_lock', '_key_builder', '_hits', '_misses', '_evictions', '_default_ttl', '_use_msgpack', '_fallback_to_raw')
+    
+    _MSGPACK_MAGIC_PREFIX = b'\x00MSGPACK\x00'
+    _CACHE_VERSION = b'\x01'
     
     def __init__(
         self,
         maxsize: int = 10000,
         ttl: float = 3600,
-        key_builder: Optional[CacheKeyBuilder] = None
+        key_builder: Optional[CacheKeyBuilder] = None,
+        use_msgpack: bool = True,
+        fallback_to_raw: bool = True
     ):
         """
         初始化TTL缓存后端
@@ -258,6 +444,8 @@ class TTLCacheBackend(CacheBackend[T]):
             maxsize: 最大缓存条目数
             ttl: 默认过期时间（秒）
             key_builder: 键构建器
+            use_msgpack: 是否使用msgpack格式存储
+            fallback_to_raw: 当格式错误时是否降级返回原始数据而非抛出异常
         """
         self._cache = TTLCache(maxsize=maxsize, ttl=ttl)
         self._lock = threading.RLock()
@@ -267,6 +455,76 @@ class TTLCacheBackend(CacheBackend[T]):
         self._misses = 0
         self._evictions = 0
         self._default_ttl = ttl
+        self._use_msgpack = use_msgpack
+        self._fallback_to_raw = fallback_to_raw
+    
+    def _pack(self, value: T) -> bytes:
+        """
+        打包值为msgpack格式
+        
+        Args:
+            value: 待打包的值
+            
+        Returns:
+            bytes: 带版本前缀的msgpack格式二进制数据
+        """
+        serialized = _serialize_value(value)
+        packed = msgpack.packb(serialized, use_bin_type=True)
+        return self._MSGPACK_MAGIC_PREFIX + self._CACHE_VERSION + packed
+    
+    def _unpack(self, data: bytes) -> T:
+        """
+        解包msgpack数据
+        
+        Args:
+            data: 带版本前缀的msgpack格式二进制数据
+            
+        Returns:
+            T: 反序列化后的值
+            
+        Raises:
+            CacheValueError: 当格式无效且fallback_to_raw=False时
+        """
+        if not data.startswith(self._MSGPACK_MAGIC_PREFIX):
+            if self._fallback_to_raw:
+                logger.warning("缓存格式无效，尝试降级处理")
+                try:
+                    unpacked = msgpack.unpackb(data, raw=False)
+                    return _deserialize_value(unpacked)
+                except Exception:
+                    pass
+            raise CacheValueError("无效的msgpack数据格式")
+        
+        offset = len(self._MSGPACK_MAGIC_PREFIX)
+        version = data[offset:offset + 1]
+        
+        if version != self._CACHE_VERSION:
+            logger.warning_with_extra("缓存版本不匹配", expected=self._CACHE_VERSION, got=version)
+            if self._fallback_to_raw:
+                try:
+                    unpacked = msgpack.unpackb(data[offset + 1:], raw=False)
+                    return _deserialize_value(unpacked)
+                except Exception as e:
+                    logger.error_with_extra("降级处理失败", error=str(e))
+            raise CacheValueError(
+                f"缓存格式版本不匹配: expected={self._CACHE_VERSION}, got={version}。"
+                f"请清除旧缓存。"
+            )
+        
+        unpacked = msgpack.unpackb(data[offset + 1:], raw=False)
+        return _deserialize_value(unpacked)
+    
+    def _is_msgpack_data(self, data: bytes) -> bool:
+        """
+        检查数据是否为msgpack格式
+        
+        Args:
+            data: 二进制数据
+            
+        Returns:
+            bool: 是否为msgpack格式
+        """
+        return isinstance(data, bytes) and data.startswith(self._MSGPACK_MAGIC_PREFIX)
     
     def get(self, key: str) -> Optional[T]:
         """
@@ -283,12 +541,29 @@ class TTLCacheBackend(CacheBackend[T]):
                 value = self._cache.get(key)
                 if value is not None:
                     self._hits += 1
+                    if self._use_msgpack:
+                        if self._is_msgpack_data(value):
+                            return self._unpack(value)
+                        if self._fallback_to_raw:
+                            logger.warning_with_extra("缓存格式无效，尝试降级读取", key=key)
+                            try:
+                                unpacked = msgpack.unpackb(value, raw=False)
+                                return _deserialize_value(unpacked)
+                            except Exception:
+                                logger.debug_with_extra("降级读取失败，返回原始值", key=key)
+                                return None
+                        raise CacheValueError(
+                            f"缓存格式错误: 期望msgpack格式但收到原始数据。"
+                            f"请清除缓存或使用 use_msgpack=False。"
+                        )
                     logger.debug_with_extra("缓存命中", key=key)
                     return value
                 else:
                     self._misses += 1
                     logger.debug_with_extra("缓存未命中", key=key)
                     return None
+            except CacheValueError:
+                raise
             except Exception as e:
                 logger.error_with_extra("缓存读取异常", key=key, error=str(e))
                 self._misses += 1
@@ -307,6 +582,10 @@ class TTLCacheBackend(CacheBackend[T]):
             try:
                 if ttl is not None and ttl != self._default_ttl:
                     self._cache.ttl = ttl
+                
+                if self._use_msgpack:
+                    value = self._pack(value)
+                
                 self._cache[key] = value
                 logger.debug_with_extra("缓存写入", key=key)
             except Exception as e:
@@ -429,6 +708,7 @@ class CacheManager:
     缓存管理器
     
     提供统一的缓存管理接口，支持多命名空间、统计监控等功能
+    性能优化：使用msgpack二进制序列化
     """
     
     _instances: dict[str, 'CacheManager'] = {}
@@ -439,7 +719,9 @@ class CacheManager:
         namespace: str = "default",
         maxsize: int = 10000,
         ttl: float = 3600,
-        key_builder: Optional[CacheKeyBuilder] = None
+        key_builder: Optional[CacheKeyBuilder] = None,
+        use_msgpack: bool = True,
+        fallback_to_raw: bool = True
     ):
         """
         初始化缓存管理器
@@ -449,12 +731,16 @@ class CacheManager:
             maxsize: 最大缓存条目数
             ttl: 默认过期时间（秒）
             key_builder: 键构建器
+            use_msgpack: 是否使用msgpack格式存储
+            fallback_to_raw: 当格式错误时是否降级返回原始数据
         """
         self.namespace = namespace
         self._backend = TTLCacheBackend(
             maxsize=maxsize,
             ttl=ttl,
-            key_builder=key_builder or CacheKeyBuilder(namespace=namespace)
+            key_builder=key_builder or CacheKeyBuilder(namespace=namespace),
+            use_msgpack=use_msgpack,
+            fallback_to_raw=fallback_to_raw
         )
         self._key_builder = self._backend._key_builder
     
@@ -463,7 +749,9 @@ class CacheManager:
         cls,
         namespace: str = "default",
         maxsize: int = 10000,
-        ttl: float = 3600
+        ttl: float = 3600,
+        use_msgpack: bool = True,
+        fallback_to_raw: bool = True
     ) -> 'CacheManager':
         """
         获取命名空间的缓存管理器实例（单例模式）
@@ -472,6 +760,8 @@ class CacheManager:
             namespace: 命名空间
             maxsize: 最大缓存条目数
             ttl: 默认过期时间（秒）
+            use_msgpack: 是否使用msgpack格式存储
+            fallback_to_raw: 当格式错误时是否降级返回原始数据
             
         Returns:
             CacheManager: 缓存管理器实例
@@ -481,7 +771,9 @@ class CacheManager:
                 cls._instances[namespace] = CacheManager(
                     namespace=namespace,
                     maxsize=maxsize,
-                    ttl=ttl
+                    ttl=ttl,
+                    use_msgpack=use_msgpack,
+                    fallback_to_raw=fallback_to_raw
                 )
             return cls._instances[namespace]
     
@@ -608,19 +900,30 @@ class CacheManager:
         return self.get_or_set(key, compute, ttl)
 
 
-def create_ip_location_cache(maxsize: int = 50000, ttl: float = 3600) -> CacheManager:
+def create_ip_location_cache(
+    namespace: str = "ip_location",
+    maxsize: int = 50000,
+    ttl: float = 3600,
+    use_msgpack: bool = True,
+    fallback_to_raw: bool = True
+) -> CacheManager:
     """
     创建IP定位专用缓存管理器
     
     Args:
+        namespace: 命名空间
         maxsize: 最大缓存条目数
         ttl: 过期时间（秒）
+        use_msgpack: 是否使用msgpack格式存储
+        fallback_to_raw: 当格式错误时是否降级返回原始数据
         
     Returns:
         CacheManager: 缓存管理器实例
     """
     return CacheManager.get_instance(
-        namespace="ip_location",
+        namespace=namespace,
         maxsize=maxsize,
-        ttl=ttl
+        ttl=ttl,
+        use_msgpack=use_msgpack,
+        fallback_to_raw=fallback_to_raw
     )

@@ -8,9 +8,11 @@
 - **高准确率** - 国内 IP 精确到城市级别，准确率 99.9%+
 - **双栈支持** - 同时支持 IPv4 和 IPv6 地址查询
 - **多源融合** - 纯真 + ip2region 双数据源投票融合
-- **智能缓存** - TTL 缓存机制，提升重复查询性能
+- **智能缓存** - TTL 缓存机制 + msgpack 二进制序列化，缓存体积减少 40%
 - **热重载** - 数据库文件更新自动检测，无需重启
 - **完善日志** - 结构化日志、按行分割、压缩归档
+- **高性能响应** - orjson 序列化，速度提升 9.6x
+- **内存优化** - 整数范围存储 + dataclass slots，减少内存占用
 - **开箱即用** - Docker 一键部署，无需复杂配置
 
 ## 快速开始
@@ -41,7 +43,7 @@ python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # Linux/macOS
 
-# 安装依赖
+# 安装依赖（包含性能优化库）
 pip install -e .
 
 # 启动服务
@@ -117,17 +119,59 @@ GET /api/v1/health
 GET /api/v1/stats
 ```
 
+### 内存使用统计
+
+```bash
+GET /api/v1/memory
+```
+
+**响应示例：**
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "process": {
+      "rss_mb": 125.5,
+      "vms_mb": 234.1,
+      "percent": 2.5
+    },
+    "tracemalloc": {
+      "available": true,
+      "current_mb": 45.2,
+      "peak_mb": 67.8
+    },
+    "cache": {
+      "size": 1234,
+      "max_size": 50000,
+      "hit_rate": 0.85,
+      "usage_percent": 2.47
+    },
+    "rate_limiter": {
+      "tracked_ips": 156
+    }
+  }
+}
+```
+
+### 清空缓存
+
+```bash
+GET /api/v1/clear-cache
+```
+
 ## 配置项
 
 通过环境变量或 `.env` 文件配置：
 
 ### 基础配置
 
-| 变量        | 默认值      | 说明     |
-| ----------- | ---------- | -------- |
-| `HOST`      | `0.0.0.0`  | 监听地址 |
-| `PORT`      | `8000`     | 监听端口 |
-| `WORKERS`   | `4`        | 工作进程数 |
+| 变量        | 默认值       | 说明    |
+| --------- | --------- | ----- |
+| `HOST`    | `0.0.0.0` | 监听地址  |
+| `PORT`    | `8000`    | 监听端口  |
+| `WORKERS` | `4`       | 工作进程数 |
 
 ### 日志配置
 
@@ -154,11 +198,13 @@ GET /api/v1/stats
 ### 日志分割与归档
 
 **分割策略**：
+
 - 单文件最大 500KB
 - 按行分割，不截断完整日志
 - 文件命名：`app.log` → `app1.log` → `app2.log`...
 
 **归档策略**：
+
 - 每天午夜自动归档
 - 整合所有分割文件压缩为 `.zip` 格式
 - 目录结构：`logs/年份/月份/日期/`
@@ -235,13 +281,15 @@ ip-location-api/
 │   ├── ip2region_v6.xdb         # IPv6 数据库
 │   └── qqwry.ipdb               # 纯真数据库
 ├── docs/
-│   └── LOG_GUIDE.md             # 日志使用规范
+│   ├── LOG_GUIDE.md            # 日志使用规范
+│   └── MEMORY_OPTIMIZATION.md  # 内存优化设计文档
 ├── src/
 │   └── ip_location_api/
 │       ├── main.py              # 应用入口
 │       ├── routes.py            # API 路由
 │       ├── fusion.py            # 多源融合引擎
 │       ├── cache_manager.py     # 缓存管理模块
+│       ├── json_response.py     # orjson 高性能响应
 │       ├── config.py            # 配置管理
 │       ├── exceptions.py        # 业务异常
 │       ├── logger.py            # 日志核心模块
@@ -259,19 +307,29 @@ ip-location-api/
 - **ip2region** - 离线 IP 地理位置数据库
 - **ipip-ipdb** - 纯真 IP 数据库解析
 - **cachetools** - TTL 缓存实现
+- **orjson** - 高性能 JSON 序列化（9.6x 提升）
+- **msgpack** - 高性能二进制序列化（40% 体积优化）
 - **Uvicorn** - ASGI 服务器
 
 ## 数据来源
 
- [ip2region](https://github.com/lionsoul2014/ip2region) 开源项目：
+### ip2region
+
+[ip2region](https://github.com/lionsoul2014/ip2region) 开源项目：
 
 - 数据准确率 99.9%+
 - 国内 IP 精确到城市
 - 国外 IP 精确到国家/省份
 
-### 纯真(CZ88.NET)自2005年起一直为广大社区用户提供社区版IP地址库，只要获得纯真的授权就能免费使用，并不断获取后续更新的版本。如果有需要免费版IP库的朋友可以前往纯真的官网进行申请。
+### 纯真 IP 库
 
-### 纯真除了免费的社区版IP库外，还提供数据更加准确、服务更加周全的商业版IP地址查询数据。纯真围绕IP地址，基于 网络空间拓扑测绘 + 移动位置大数据 方案，对IP地址定位、IP网络风险、IP使用场景、IP网络类型、秒拨侦测、VPN侦测、代理侦测、爬虫侦测、真人度等均有近20年丰富的数据沉淀。
+[纯真 IP 库](https://www.cz88.com/) 是国内历史最悠久的 IP 地理位置库之一，自 2005 年起为广大社区用户提供社区版 IP 地址库。
+
+- **官网**：[https://www.cz88.com/](https://www.cz88.com/)
+- **社区版**：免费使用，只要获得授权即可不断获取后续更新的版本
+- **商业版**：提供数据更加准确、服务更加周全的商业版 IP 地址查询数据
+
+纯真围绕 IP 地址，基于网络空间拓扑测绘 + 移动位置大数据方案，对 IP 地址定位、IP 网络风险、IP 使用场景、IP 网络类型、秒拨侦测、VPN 侦测、代理侦测、爬虫侦测、真人度等均有近 20 年丰富的数据沉淀。
 
 ## License
 

@@ -16,7 +16,7 @@ from typing import Optional, List, Dict
 
 from ip_location_api.config import config
 from ip_location_api.logger import get_logger
-from ip_location_api.cache_manager import create_ip_location_cache, CacheManager
+from ip_location_api.cache_manager import create_ip_location_cache
 
 
 logger = get_logger(__name__)
@@ -38,7 +38,7 @@ class AccuracyLevel(Enum):
     UNKNOWN = "unknown"
 
 
-@dataclass
+@dataclass(slots=True)
 class LocationSource:
     """
     单数据源定位结果
@@ -53,7 +53,7 @@ class LocationSource:
         latitude: 纬度（可选）
         longitude: 经度（可选）
     """
-    source: str
+    source: str = ""
     country: str = ""
     province: str = ""
     city: str = ""
@@ -63,7 +63,7 @@ class LocationSource:
     longitude: Optional[float] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class FusedLocation:
     """
     融合定位结果
@@ -83,7 +83,7 @@ class FusedLocation:
         sources: 各数据源的原始结果
         cached: 是否来自缓存
     """
-    ip: str
+    ip: str = ""
     country: str = ""
     province: str = ""
     city: str = ""
@@ -203,23 +203,40 @@ class CGNATDetector:
     """
     CGNAT共享出口检测器
     
-    使用IP段匹配检测，支持高效查询
+    使用紧凑的IP段存储（整数范围），大幅减少内存占用
+    将IPv4Network对象转换为(network_address, broadcast_address)整数元组
     """
     
+    __slots__ = ()
+    
     _initialized = False
-    _mobile_networks: List[ipaddress.IPv4Network] = []
-    _unicom_networks: List[ipaddress.IPv4Network] = []
-    _telecom_networks: List[ipaddress.IPv4Network] = []
+    _mobile_ranges: List[tuple] = []
+    _unicom_ranges: List[tuple] = []
+    _telecom_ranges: List[tuple] = []
     _lock = threading.Lock()
     
-    MOBILE_KEYWORDS = ["移动", "中国移动", "China Mobile", "CMCC"]
-    UNICOM_KEYWORDS = ["联通", "中国联通", "China Unicom", "CNC", "UNICOM"]
-    TELECOM_KEYWORDS = ["电信", "中国电信", "China Telecom", "CT", "CHINANET"]
+    MOBILE_KEYWORDS = ("移动", "中国移动", "China Mobile", "CMCC")
+    UNICOM_KEYWORDS = ("联通", "中国联通", "China Unicom", "CNC", "UNICOM")
+    TELECOM_KEYWORDS = ("电信", "中国电信", "China Telecom", "CT", "CHINANET")
+    
+    @classmethod
+    def _cidr_to_range(cls, cidr: str) -> tuple:
+        """
+        将CIDR转换为整数范围元组
+        
+        Args:
+            cidr: CIDR格式的IP段，如 "223.64.0.0/11"
+            
+        Returns:
+            tuple: (起始IP整数, 结束IP整数)
+        """
+        network = ipaddress.ip_network(cidr, strict=False)
+        return (int(network.network_address), int(network.broadcast_address))
     
     @classmethod
     def _init_networks(cls):
         """
-        初始化运营商IP段（使用CIDR格式，更高效）
+        初始化运营商IP段（使用整数范围，内存效率更高）
         """
         if cls._initialized:
             return
@@ -228,103 +245,117 @@ class CGNATDetector:
             if cls._initialized:
                 return
             
-            # 中国移动主要IP段（CIDR格式）
-            cls._mobile_networks = [
-                ipaddress.ip_network("223.64.0.0/11"),
-                ipaddress.ip_network("223.96.0.0/12"),
-                ipaddress.ip_network("223.112.0.0/14"),
-                ipaddress.ip_network("36.0.0.0/8"),
-                ipaddress.ip_network("39.128.0.0/10"),
-                ipaddress.ip_network("120.192.0.0/10"),
-                ipaddress.ip_network("111.0.0.0/10"),
-                ipaddress.ip_network("112.0.0.0/11"),
-                ipaddress.ip_network("117.128.0.0/10"),
-                ipaddress.ip_network("183.192.0.0/10"),
+            cls._mobile_ranges = [
+                cls._cidr_to_range("223.64.0.0/11"),
+                cls._cidr_to_range("223.96.0.0/12"),
+                cls._cidr_to_range("223.112.0.0/14"),
+                cls._cidr_to_range("36.0.0.0/8"),
+                cls._cidr_to_range("39.128.0.0/10"),
+                cls._cidr_to_range("120.192.0.0/10"),
+                cls._cidr_to_range("111.0.0.0/10"),
+                cls._cidr_to_range("112.0.0.0/11"),
+                cls._cidr_to_range("117.128.0.0/10"),
+                cls._cidr_to_range("183.192.0.0/10"),
             ]
             
-            # 中国联通主要IP段
-            cls._unicom_networks = [
-                ipaddress.ip_network("60.0.0.0/11"),
-                ipaddress.ip_network("61.128.0.0/10"),
-                ipaddress.ip_network("106.0.0.0/9"),
-                ipaddress.ip_network("110.128.0.0/11"),
-                ipaddress.ip_network("112.0.0.0/12"),
-                ipaddress.ip_network("113.0.0.0/9"),
-                ipaddress.ip_network("115.0.0.0/10"),
-                ipaddress.ip_network("116.0.0.0/9"),
-                ipaddress.ip_network("118.0.0.0/11"),
-                ipaddress.ip_network("119.0.0.0/10"),
-                ipaddress.ip_network("123.0.0.0/9"),
-                ipaddress.ip_network("124.0.0.0/11"),
-                ipaddress.ip_network("125.0.0.0/10"),
-                ipaddress.ip_network("140.0.0.0/9"),
-                ipaddress.ip_network("153.0.0.0/10"),
-                ipaddress.ip_network("180.128.0.0/10"),
-                ipaddress.ip_network("202.96.0.0/12"),
-                ipaddress.ip_network("210.0.0.0/10"),
-                ipaddress.ip_network("211.0.0.0/11"),
-                ipaddress.ip_network("218.0.0.0/9"),
-                ipaddress.ip_network("219.128.0.0/10"),
-                ipaddress.ip_network("220.128.0.0/11"),
-                ipaddress.ip_network("221.0.0.0/10"),
-                ipaddress.ip_network("222.0.0.0/9"),
+            cls._unicom_ranges = [
+                cls._cidr_to_range("60.0.0.0/11"),
+                cls._cidr_to_range("61.128.0.0/10"),
+                cls._cidr_to_range("106.0.0.0/9"),
+                cls._cidr_to_range("110.128.0.0/11"),
+                cls._cidr_to_range("112.0.0.0/12"),
+                cls._cidr_to_range("113.0.0.0/9"),
+                cls._cidr_to_range("115.0.0.0/10"),
+                cls._cidr_to_range("116.0.0.0/9"),
+                cls._cidr_to_range("118.0.0.0/11"),
+                cls._cidr_to_range("119.0.0.0/10"),
+                cls._cidr_to_range("123.0.0.0/9"),
+                cls._cidr_to_range("124.0.0.0/11"),
+                cls._cidr_to_range("125.0.0.0/10"),
+                cls._cidr_to_range("140.0.0.0/9"),
+                cls._cidr_to_range("153.0.0.0/10"),
+                cls._cidr_to_range("180.128.0.0/10"),
+                cls._cidr_to_range("202.96.0.0/12"),
+                cls._cidr_to_range("210.0.0.0/10"),
+                cls._cidr_to_range("211.0.0.0/11"),
+                cls._cidr_to_range("218.0.0.0/9"),
+                cls._cidr_to_range("219.128.0.0/10"),
+                cls._cidr_to_range("220.128.0.0/11"),
+                cls._cidr_to_range("221.0.0.0/10"),
+                cls._cidr_to_range("222.0.0.0/9"),
             ]
             
-            # 中国电信主要IP段
-            cls._telecom_networks = [
-                ipaddress.ip_network("1.0.0.0/8"),
-                ipaddress.ip_network("14.0.0.0/8"),
-                ipaddress.ip_network("27.0.0.0/8"),
-                ipaddress.ip_network("36.0.0.0/8"),
-                ipaddress.ip_network("42.0.0.0/8"),
-                ipaddress.ip_network("49.0.0.0/8"),
-                ipaddress.ip_network("58.0.0.0/8"),
-                ipaddress.ip_network("59.0.0.0/8"),
-                ipaddress.ip_network("60.0.0.0/8"),
-                ipaddress.ip_network("61.0.0.0/8"),
-                ipaddress.ip_network("101.0.0.0/8"),
-                ipaddress.ip_network("106.0.0.0/8"),
-                ipaddress.ip_network("110.0.0.0/8"),
-                ipaddress.ip_network("111.0.0.0/8"),
-                ipaddress.ip_network("112.0.0.0/8"),
-                ipaddress.ip_network("113.0.0.0/8"),
-                ipaddress.ip_network("114.0.0.0/8"),
-                ipaddress.ip_network("115.0.0.0/8"),
-                ipaddress.ip_network("116.0.0.0/8"),
-                ipaddress.ip_network("117.0.0.0/8"),
-                ipaddress.ip_network("118.0.0.0/8"),
-                ipaddress.ip_network("119.0.0.0/8"),
-                ipaddress.ip_network("120.0.0.0/8"),
-                ipaddress.ip_network("121.0.0.0/8"),
-                ipaddress.ip_network("122.0.0.0/8"),
-                ipaddress.ip_network("123.0.0.0/8"),
-                ipaddress.ip_network("124.0.0.0/8"),
-                ipaddress.ip_network("125.0.0.0/8"),
-                ipaddress.ip_network("126.0.0.0/8"),
-                ipaddress.ip_network("180.0.0.0/8"),
-                ipaddress.ip_network("182.0.0.0/8"),
-                ipaddress.ip_network("183.0.0.0/8"),
-                ipaddress.ip_network("202.0.0.0/8"),
-                ipaddress.ip_network("210.0.0.0/8"),
-                ipaddress.ip_network("211.0.0.0/8"),
-                ipaddress.ip_network("218.0.0.0/8"),
-                ipaddress.ip_network("219.0.0.0/8"),
-                ipaddress.ip_network("220.0.0.0/8"),
-                ipaddress.ip_network("221.0.0.0/8"),
-                ipaddress.ip_network("222.0.0.0/8"),
-                ipaddress.ip_network("223.0.0.0/8"),
+            cls._telecom_ranges = [
+                cls._cidr_to_range("1.0.0.0/8"),
+                cls._cidr_to_range("14.0.0.0/8"),
+                cls._cidr_to_range("27.0.0.0/8"),
+                cls._cidr_to_range("36.0.0.0/8"),
+                cls._cidr_to_range("42.0.0.0/8"),
+                cls._cidr_to_range("49.0.0.0/8"),
+                cls._cidr_to_range("58.0.0.0/8"),
+                cls._cidr_to_range("59.0.0.0/8"),
+                cls._cidr_to_range("60.0.0.0/8"),
+                cls._cidr_to_range("61.0.0.0/8"),
+                cls._cidr_to_range("101.0.0.0/8"),
+                cls._cidr_to_range("106.0.0.0/8"),
+                cls._cidr_to_range("110.0.0.0/8"),
+                cls._cidr_to_range("111.0.0.0/8"),
+                cls._cidr_to_range("112.0.0.0/8"),
+                cls._cidr_to_range("113.0.0.0/8"),
+                cls._cidr_to_range("114.0.0.0/8"),
+                cls._cidr_to_range("115.0.0.0/8"),
+                cls._cidr_to_range("116.0.0.0/8"),
+                cls._cidr_to_range("117.0.0.0/8"),
+                cls._cidr_to_range("118.0.0.0/8"),
+                cls._cidr_to_range("119.0.0.0/8"),
+                cls._cidr_to_range("120.0.0.0/8"),
+                cls._cidr_to_range("121.0.0.0/8"),
+                cls._cidr_to_range("122.0.0.0/8"),
+                cls._cidr_to_range("123.0.0.0/8"),
+                cls._cidr_to_range("124.0.0.0/8"),
+                cls._cidr_to_range("125.0.0.0/8"),
+                cls._cidr_to_range("126.0.0.0/8"),
+                cls._cidr_to_range("180.0.0.0/8"),
+                cls._cidr_to_range("182.0.0.0/8"),
+                cls._cidr_to_range("183.0.0.0/8"),
+                cls._cidr_to_range("202.0.0.0/8"),
+                cls._cidr_to_range("210.0.0.0/8"),
+                cls._cidr_to_range("211.0.0.0/8"),
+                cls._cidr_to_range("218.0.0.0/8"),
+                cls._cidr_to_range("219.0.0.0/8"),
+                cls._cidr_to_range("220.0.0.0/8"),
+                cls._cidr_to_range("221.0.0.0/8"),
+                cls._cidr_to_range("222.0.0.0/8"),
+                cls._cidr_to_range("223.0.0.0/8"),
             ]
             
             cls._initialized = True
             logger.info_with_extra(
-                "CGNAT检测器初始化完成",
-                mobile_networks=len(cls._mobile_networks),
-                unicom_networks=len(cls._unicom_networks),
-                telecom_networks=len(cls._telecom_networks)
+                "CGNAT检测器初始化完成（内存优化版）",
+                mobile_ranges=len(cls._mobile_ranges),
+                unicom_ranges=len(cls._unicom_ranges),
+                telecom_ranges=len(cls._telecom_ranges)
             )
     
     @classmethod
-    def detect(cls, ip: str, isp: str = "") -> tuple[bool, str]:
+    def _ip_in_ranges(cls, ip_int: int, ranges: List[tuple]) -> bool:
+        """
+        检查IP整数是否在任意范围内
+        
+        Args:
+            ip_int: IP地址的整数表示
+            ranges: 范围列表
+            
+        Returns:
+            bool: 是否在范围内
+        """
+        for start, end in ranges:
+            if start <= ip_int <= end:
+                return True
+        return False
+    
+    @classmethod
+    def detect(cls, ip: str, isp: str = "") -> tuple:
         """
         检测IP是否可能是CGNAT共享出口
         
@@ -341,32 +372,26 @@ class CGNATDetector:
             ip_addr = ipaddress.ip_address(ip)
             if ip_addr.version != 4:
                 return False, ""
+            ip_int = int(ip_addr)
         except ValueError:
             return False, ""
         
-        # 检查私有IP
         if ip_addr.is_private:
             return True, "私有IP地址，位于NAT网关后"
         
-        # 检查运营商关键词
         is_mobile_isp = any(kw in isp for kw in cls.MOBILE_KEYWORDS)
         is_unicom_isp = any(kw in isp for kw in cls.UNICOM_KEYWORDS)
         is_telecom_isp = any(kw in isp for kw in cls.TELECOM_KEYWORDS)
         
-        # 检查IP段
-        for network in cls._mobile_networks:
-            if ip_addr in network:
-                return True, "中国移动网络，可能使用CGNAT共享出口IP"
+        if cls._ip_in_ranges(ip_int, cls._mobile_ranges):
+            return True, "中国移动网络，可能使用CGNAT共享出口IP"
         
-        for network in cls._unicom_networks:
-            if ip_addr in network:
-                return True, "中国联通网络，可能使用CGNAT共享出口IP"
+        if cls._ip_in_ranges(ip_int, cls._unicom_ranges):
+            return True, "中国联通网络，可能使用CGNAT共享出口IP"
         
-        for network in cls._telecom_networks:
-            if ip_addr in network:
-                return True, "中国电信网络，可能使用CGNAT共享出口IP"
+        if cls._ip_in_ranges(ip_int, cls._telecom_ranges):
+            return True, "中国电信网络，可能使用CGNAT共享出口IP"
         
-        # 根据运营商关键词判断
         if is_mobile_isp:
             return True, "中国移动网络，可能使用CGNAT共享出口IP"
         if is_unicom_isp:
@@ -400,7 +425,12 @@ class FusionEngine:
         self._ip2region_v6_buffer = None
         self._qqwry = None
         
-        self._cache: CacheManager = create_ip_location_cache(maxsize=50000, ttl=3600)
+        self._cache: CacheManager = create_ip_location_cache(
+            namespace="ip_location",
+            maxsize=50000,
+            ttl=3600,
+            use_msgpack=True
+        )
         
         self._source_status = {
             "qqwry": {"available": False, "error": None},
@@ -480,6 +510,9 @@ class FusionEngine:
         """
         预加载所有数据库
         """
+        from ip_location_api.cache_manager import register_fusion_types
+        register_fusion_types()
+        
         logger.info("开始预加载数据库...")
         self._init_qqwry()
         self._init_ip2region(4)

@@ -1,12 +1,13 @@
 """
 FastAPI主应用
 IP定位API服务入口
+性能优化：使用 orjson 进行高性能 JSON 序列化
 """
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 import time
 
 from ip_location_api.config import config
@@ -15,6 +16,7 @@ from ip_location_api.fusion import fusion_engine
 from ip_location_api.logger import LoggerManager, get_logger
 from ip_location_api.logging_middleware import RequestLoggingMiddleware, SlowRequestMiddleware
 from ip_location_api.exceptions import IPQueryException
+from ip_location_api.json_response import ORJSONResponse
 
 
 LoggerManager.setup()
@@ -51,6 +53,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
     lifespan=lifespan,
+    default_response_class=ORJSONResponse,
 )
 
 app.add_middleware(
@@ -75,7 +78,7 @@ async def ip_query_exception_handler(request: Request, exc: IPQueryException):
         code=exc.code,
         path=request.url.path
     )
-    return JSONResponse(
+    return ORJSONResponse(
         status_code=exc.code if exc.code < 500 else 500,
         content={
             "code": exc.code,
@@ -98,7 +101,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         path=request.url.path,
         error_type=type(exc).__name__
     )
-    return JSONResponse(
+    return ORJSONResponse(
         status_code=500,
         content={
             "code": 500,

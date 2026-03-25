@@ -2,12 +2,14 @@
 API路由模块
 定义所有HTTP接口端点
 支持IPv4和IPv6双栈查询，多数据源融合定位
+性能优化：使用 orjson 进行高性能 JSON 序列化
 """
 
 import asyncio
 import ipaddress
 import time
-from collections import defaultdict
+import sys
+import orjson
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -15,6 +17,7 @@ from typing import Optional
 
 from ip_location_api.fusion import fusion_engine
 from ip_location_api.logger import get_logger
+from ip_location_api.json_response import ORJSONResponse
 
 
 logger = get_logger(__name__)
@@ -26,10 +29,10 @@ router = APIRouter()
 def is_valid_ip(ip: str) -> bool:
     """
     验证IP地址格式是否有效
-    
+
     Args:
         ip: IP地址字符串
-        
+
     Returns:
         bool: 是否为有效的IPv4或IPv6地址
     """
@@ -54,24 +57,21 @@ class IPLocationResponse(BaseModel):
     data: Optional[dict] = Field(default=None, description="定位数据")
     
     class Config:
-        json_schema_extra = {
-            "example": {
-                "code": 0,
-                "message": "success",
-                "data": {
-                    "ip": "8.8.8.8",
-                    "country": "United States",
-                    "province": "California",
-                    "city": "",
-                    "isp": "Google LLC",
-                    "country_code": "US",
-                    "is_china": False,
-                    "ip_version": 4,
-                    "accuracy": "medium",
-                    "is_cgnat": False,
-                    "cached": False
-                }
-            }
+        json_encoders = {
+            bytes: lambda v: v.decode('utf-8'),
+        }
+    
+    def model_dump(self, **kwargs):
+        """
+        重写 model_dump 支持 orjson
+        
+        Returns:
+            dict: 模型字典
+        """
+        return {
+            "code": self.code,
+            "message": self.message,
+            "data": self.data,
         }
 
 
@@ -96,7 +96,10 @@ class RateLimiter:
     请求限流器
     
     基于滑动窗口算法实现IP级别的请求限流
+    支持自动清理过期IP记录，防止内存泄漏
     """
+    
+    __slots__ = ('max_requests', 'window', 'requests', '_lock', '_last_cleanup', '_cleanup_interval')
     
     def __init__(self, max_requests: int = 100, window_seconds: int = 60):
         """
@@ -108,10 +111,33 @@ class RateLimiter:
         """
         self.max_requests = max_requests
         self.window = window_seconds
-        self.requests: dict[str, list[float]] = defaultdict(list)
+        self.requests: dict = {}
         self._lock = asyncio.Lock()
+        self._last_cleanup = time.time()
+        self._cleanup_interval = 300
     
-    async def is_allowed(self, client_ip: str) -> tuple[bool, int]:
+    async def _cleanup_expired(self):
+        """
+        清理过期的IP记录，防止内存泄漏
+        """
+        now = time.time()
+        if now - self._last_cleanup < self._cleanup_interval:
+            return
+        
+        self._last_cleanup = now
+        expired_ips = []
+        
+        for ip, timestamps in self.requests.items():
+            if not timestamps or (timestamps and now - timestamps[-1] > self.window):
+                expired_ips.append(ip)
+        
+        for ip in expired_ips:
+            del self.requests[ip]
+        
+        if expired_ips:
+            logger.debug_with_extra("清理过期限流记录", count=len(expired_ips))
+    
+    async def is_allowed(self, client_ip: str) -> tuple:
         """
         检查请求是否允许
         
@@ -122,13 +148,17 @@ class RateLimiter:
             tuple[bool, int]: (是否允许, 剩余请求数)
         """
         async with self._lock:
+            await self._cleanup_expired()
+            
             now = time.time()
             
-            # 清理过期请求
-            self.requests[client_ip] = [
-                t for t in self.requests[client_ip]
-                if now - t < self.window
-            ]
+            if client_ip in self.requests:
+                self.requests[client_ip] = [
+                    t for t in self.requests[client_ip]
+                    if now - t < self.window
+                ]
+            else:
+                self.requests[client_ip] = []
             
             current_count = len(self.requests[client_ip])
             remaining = self.max_requests - current_count
@@ -151,6 +181,22 @@ class RateLimiter:
             "max_requests": self.max_requests,
             "window_seconds": self.window,
         }
+    
+    def clear_expired(self):
+        """
+        手动清理所有过期记录
+        """
+        now = time.time()
+        expired_ips = []
+        
+        for ip, timestamps in self.requests.items():
+            if not timestamps or (timestamps and now - timestamps[-1] > self.window):
+                expired_ips.append(ip)
+        
+        for ip in expired_ips:
+            del self.requests[ip]
+        
+        return len(expired_ips)
 
 
 limiter = RateLimiter(max_requests=200, window_seconds=60)
@@ -385,6 +431,68 @@ async def get_stats() -> IPLocationResponse:
             "rate_limiter": limiter.get_stats(),
         }
     )
+
+
+@router.get("/memory", response_model=IPLocationResponse, summary="内存使用统计")
+async def get_memory_stats() -> IPLocationResponse:
+    """
+    获取内存使用统计信息
+    
+    返回进程内存使用情况、对象数量等信息，用于监控和优化。
+    """
+    try:
+        import tracemalloc
+        if not tracemalloc.is_tracing():
+            tracemalloc.start()
+        
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc_available = True
+    except:
+        current, peak = 0, 0
+        tracemalloc_available = False
+    
+    process_memory = {
+        "rss_mb": 0,
+        "vms_mb": 0,
+        "percent": 0.0,
+    }
+    
+    import psutil
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    process_memory = {
+        "rss_mb": round(memory_info.rss / 1024 / 1024, 2),
+        "vms_mb": round(memory_info.vms / 1024 / 1024, 2),
+        "percent": round(process.memory_percent(), 2),
+    }
+    
+    cache_stats = fusion_engine.get_cache_stats()
+    
+    rate_limiter_stats = limiter.get_stats()
+    
+    memory_stats = {
+        "process": process_memory,
+        "tracemalloc": {
+            "available": tracemalloc_available,
+            "current_mb": round(current / 1024 / 1024, 2),
+            "peak_mb": round(peak / 1024 / 1024, 2),
+        },
+        "cache": {
+            "size": cache_stats.size,
+            "max_size": cache_stats.max_size,
+            "hit_rate": cache_stats.hit_rate,
+            "usage_percent": round(cache_stats.size / cache_stats.max_size * 100, 2) if cache_stats.max_size > 0 else 0,
+        },
+        "rate_limiter": {
+            "tracked_ips": rate_limiter_stats["tracked_ips"],
+        },
+        "python": {
+            "version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "implementation": sys.implementation.name if hasattr(sys, 'implementation') else 'unknown',
+        },
+    }
+    
+    return IPLocationResponse(data=memory_stats)
 
 
 @router.get("/clear-cache", response_model=IPLocationResponse, summary="清空缓存")
